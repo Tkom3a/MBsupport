@@ -90,6 +90,8 @@ class OutputConfig:
     csv_name: str = "shots.csv"
     jsonl_name: str = "shots.jsonl"
     hints_name: str = "distance_hints.csv"
+    retain_hours: int = 48
+    cleanup_sec: int = 3600
 
 
 @dataclass
@@ -266,6 +268,10 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         notify.telegram_chat_id = _env("TELEGRAM_CHAT_ID")
     if _env_filled("TELEGRAM_MIN_PERCENT"):
         notify.telegram_min_percent = _as_float("TELEGRAM_MIN_PERCENT", notify.telegram_min_percent)
+    if _env_filled("RETENTION_HOURS"):
+        output.retain_hours = max(1, _as_int("RETENTION_HOURS", output.retain_hours))
+    if _env_filled("RETENTION_CLEANUP_SEC"):
+        output.cleanup_sec = max(300, _as_int("RETENTION_CLEANUP_SEC", output.cleanup_sec))
 
     return AppConfig(
         exchange=exchange,
@@ -307,6 +313,7 @@ def public_filters(cfg: AppConfig) -> dict[str, Any]:
         "btc_range_pct": cfg.btc_filter.range_pct,
         "timezone": cfg.web.timezone,
         "stats_lookback_min": cfg.web.stats_lookback_min,
+        "retain_hours": cfg.output.retain_hours,
     }
 
 

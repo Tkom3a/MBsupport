@@ -29,7 +29,8 @@ def build_app(core: ShotCore) -> web.Application:
     app.router.add_get("/api/stats", _stats)
     app.router.add_get("/api/shots", _shots)
     app.router.add_get("/api/chart", _chart)
-    app.router.add_static("/static", WEB_DIR)
+    if WEB_DIR.is_dir():
+        app.router.add_static("/static", WEB_DIR)
     return app
 
 
@@ -61,20 +62,36 @@ async def _health(_request: web.Request) -> web.Response:
     return web.Response(text="ok")
 
 
-async def _favicon_ico(_request: web.Request) -> web.FileResponse:
-    return web.FileResponse(WEB_DIR / "favicon.ico")
+_chart_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_chart_lock: asyncio.Lock | None = None
+_CHART_TTL = 90.0
+_CHART_MAX = 24
 
 
-async def _favicon_png(_request: web.Request) -> web.FileResponse:
-    return web.FileResponse(WEB_DIR / "favicon.png")
+def _file(name: str) -> web.StreamResponse:
+    path = WEB_DIR / name
+    if not path.is_file():
+        return web.Response(status=404, text="not found")
+    return web.FileResponse(path)
 
 
-async def _apple_icon(_request: web.Request) -> web.FileResponse:
-    return web.FileResponse(WEB_DIR / "apple-touch-icon.png")
+async def _favicon_ico(_request: web.Request) -> web.StreamResponse:
+    return _file("favicon.ico")
 
 
-async def _index(_request: web.Request) -> web.FileResponse:
-    return web.FileResponse(WEB_DIR / "index.html")
+async def _favicon_png(_request: web.Request) -> web.StreamResponse:
+    return _file("favicon.png")
+
+
+async def _apple_icon(_request: web.Request) -> web.StreamResponse:
+    return _file("apple-touch-icon.png")
+
+
+async def _index(_request: web.Request) -> web.StreamResponse:
+    path = WEB_DIR / "index.html"
+    if not path.is_file():
+        return web.Response(status=500, text="index.html missing")
+    return web.FileResponse(path)
 
 
 async def _status(request: web.Request) -> web.Response:
@@ -117,10 +134,11 @@ async def _shots(request: web.Request) -> web.Response:
     return _json({"shots": core.store.recent(limit=limit, lookback_min=lookback, direction=direction)})
 
 
-_chart_cache: dict[str, tuple[float, dict[str, Any]]] = {}
-_chart_lock = asyncio.Lock()
-_CHART_TTL = 90.0
-_CHART_MAX = 24
+def _get_chart_lock() -> asyncio.Lock:
+    global _chart_lock
+    if _chart_lock is None:
+        _chart_lock = asyncio.Lock()
+    return _chart_lock
 
 
 async def _chart(request: web.Request) -> web.Response:
@@ -135,7 +153,7 @@ async def _chart(request: web.Request) -> web.Response:
     if cached and now - cached[0] < _CHART_TTL:
         return _json(cached[1])
 
-    async with _chart_lock:
+    async with _get_chart_lock():
         cached = _chart_cache.get(key)
         if cached and time.monotonic() - cached[0] < _CHART_TTL:
             return _json(cached[1])

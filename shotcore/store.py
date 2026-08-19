@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import statistics
+import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,6 +53,7 @@ class ShotStore:
         hints_name: str,
         tz_name: str = "UTC",
         distance_levels: list[float] | None = None,
+        retain_hours: int = 48,
     ):
         self.directory = directory
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -60,10 +62,14 @@ class ShotStore:
         self.hints_path = self.directory / hints_name
         self.tz = _zone(tz_name)
         self.distance_levels = distance_levels or [1.11, 1.32, 1.42, 1.63, 1.78]
+        self.retain_hours = max(1, int(retain_hours))
         self.events: deque[dict[str, Any]] = deque(maxlen=50_000)
         self.total = 0
         self._ensure_csv()
-        self._load_existing()
+        skipped = self._load_existing()
+        if skipped:
+            self._rewrite_files()
+            log.info("Dropped %s shots older than %sh on load", skipped, self.retain_hours)
 
     def _ensure_csv(self) -> None:
         if self.csv_path.exists():
@@ -77,11 +83,13 @@ class ShotStore:
         with self.csv_path.open("w", newline="", encoding="utf-8") as fh:
             csv.DictWriter(fh, fieldnames=CSV_FIELDS).writeheader()
 
-    def _load_existing(self) -> None:
+    def _load_existing(self) -> int:
         source = self.jsonl_path if self.jsonl_path.exists() else self.csv_path
         if not source.exists():
-            return
+            return 0
         loaded = 0
+        skipped = 0
+        cutoff = _cutoff_ms(self.retain_hours)
         try:
             if source.suffix == ".jsonl":
                 with source.open(encoding="utf-8") as fh:
@@ -91,21 +99,30 @@ class ShotStore:
                             continue
                         row = json.loads(line)
                         event = _row_to_event(row)
-                        if event:
-                            self.events.append(event)
-                            loaded += 1
+                        if not event:
+                            continue
+                        if event["peak_ts"] < cutoff:
+                            skipped += 1
+                            continue
+                        self.events.append(event)
+                        loaded += 1
             else:
                 with source.open(encoding="utf-8", newline="") as fh:
                     reader = csv.DictReader(fh)
                     for row in reader:
                         event = _row_to_event(row)
-                        if event:
-                            self.events.append(event)
-                            loaded += 1
+                        if not event:
+                            continue
+                        if event["peak_ts"] < cutoff:
+                            skipped += 1
+                            continue
+                        self.events.append(event)
+                        loaded += 1
             self.total = len(self.events)
-            log.info("Loaded %s historic shots from %s", loaded, source.name)
+            log.info("Loaded %s historic shots from %s (skipped %s older than %sh)", loaded, source.name, skipped, self.retain_hours)
         except Exception as exc:
             log.warning("Could not load historic shots: %s", exc)
+        return skipped
 
     def write(self, event: ShotEvent) -> dict[str, Any]:
         when = datetime.fromtimestamp(event.peak_ts / 1000, tz=timezone.utc)
@@ -272,6 +289,54 @@ class ShotStore:
     def as_public(self, item: dict[str, Any]) -> dict[str, Any]:
         return _public_event(item, self.tz)
 
+    def prune(self) -> int:
+        cutoff = _cutoff_ms(self.retain_hours)
+        kept = [item for item in self.events if item["peak_ts"] >= cutoff]
+        dropped = len(self.events) - len(kept)
+        if dropped <= 0:
+            return 0
+        self.events = deque(kept, maxlen=50_000)
+        self.total = len(self.events)
+        self._rewrite_files()
+        log.info("Retention: removed %s shots older than %sh, kept %s", dropped, self.retain_hours, self.total)
+        return dropped
+
+    def purge_sidecar_files(self) -> int:
+        removed = 0
+        cutoff = time.time() - self.retain_hours * 3600
+        suffixes = {".bak", ".png", ".jpg", ".jpeg", ".webp", ".tmp"}
+        for path in self.directory.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in suffixes:
+                continue
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink(missing_ok=True)
+                    removed += 1
+            except OSError:
+                continue
+        return removed
+
+    def _rewrite_files(self) -> None:
+        rows = [_event_to_row(item) for item in self.events]
+        tmp_csv = self.csv_path.with_suffix(".csv.tmp")
+        with tmp_csv.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(row)
+        tmp_csv.replace(self.csv_path)
+        tmp_jsonl = self.jsonl_path.with_suffix(".jsonl.tmp")
+        with tmp_jsonl.open("w", encoding="utf-8") as fh:
+            for row in rows:
+                fh.write(
+                    json.dumps(
+                        {**row, "btc_calm": bool(int(row["btc_calm"])), "vplus": bool(int(row["vplus"]))},
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+        tmp_jsonl.replace(self.jsonl_path)
+
 
 def _best_distance(shots: list[dict[str, Any]], levels: list[float]) -> tuple[float, list[dict[str, Any]]]:
     stats: list[dict[str, Any]] = []
@@ -305,6 +370,43 @@ def _best_distance(shots: list[dict[str, Any]], levels: list[float]) -> tuple[fl
         return best["distance"], stats
     percents = sorted(float(x["percent"]) for x in shots)
     return round(_percentile(percents, 50) * 0.85, 2), stats
+
+
+def _cutoff_ms(retain_hours: int) -> int:
+    return int(datetime.now(tz=timezone.utc).timestamp() * 1000) - retain_hours * 3_600_000
+
+
+def _event_to_row(item: dict[str, Any]) -> dict[str, Any]:
+    when = datetime.fromtimestamp(int(item["peak_ts"]) / 1000, tz=timezone.utc)
+    report = item.get("distance_report") or []
+    if not isinstance(report, str):
+        report = json.dumps(report, ensure_ascii=False)
+    return {
+        "time": when.isoformat(),
+        "symbol": item.get("symbol") or "",
+        "direction": item.get("direction") or "",
+        "percent": f"{float(item.get('percent') or 0):.4f}",
+        "window_ms": int(item.get("window_ms") or 0),
+        "start_price": item.get("start_price") or 0,
+        "extreme_price": item.get("extreme_price") or 0,
+        "last_price": item.get("last_price") or 0,
+        "trades": item.get("trades") or 0,
+        "quote_volume": item.get("quote_volume") or 0,
+        "duration_ms": item.get("duration_ms") or 0,
+        "btc_delta_pct": item.get("btc_delta_pct") or 0,
+        "btc_calm": int(bool(item.get("btc_calm"))),
+        "pct_300": item.get("pct_300") or 0,
+        "pct_1000": item.get("pct_1000") or 0,
+        "pct_3000": item.get("pct_3000") or 0,
+        "hold_ms": item.get("hold_ms") or 300,
+        "exit_price": item.get("exit_price") or 0,
+        "rollback_pct": item.get("rollback_pct") or 0,
+        "vplus": int(bool(item.get("vplus"))),
+        "pnl_pct": item.get("pnl_pct") or 0,
+        "suggest_distance": item.get("suggest_distance") or 0,
+        "distance_report": report,
+        "lever": item.get("lever") or 0,
+    }
 
 
 def _zone(name: str) -> ZoneInfo:

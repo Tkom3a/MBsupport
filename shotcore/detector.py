@@ -67,7 +67,7 @@ class SymbolDetector:
         cooldown_ms: int,
         recover_ratio: float,
         hold_ms: int = 300,
-        refractory_ms: int = 1_000
+        refractory_ms: int = 1_000,
         distance_levels: list[float] | None = None,
         vplus_min_pnl: float = 0.0,
     ):

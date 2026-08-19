@@ -115,10 +115,35 @@ async def rank_active_markets(
             break
         board.append(item)
     log.info(
-        "Active markets: ranked %s, skip first %s, subscribe %s (sort %ss, 1ч Δ then |15м оΔ|)",
+        "Active markets: ranked %s, skip first %s, subscribe %s (sort %ss)",
         len(ranked),
         ignore_first,
         sum(1 for item in board if item.subscribed),
         cfg.sort_sec,
     )
+    return board
+
+
+def board_from_qav(instruments: list[Instrument], cfg: ActiveMarketsConfig) -> list[ActiveMarket]:
+    """Fallback if candle ranking fails: same 25/skip-2 window, order by 24h quote volume."""
+    ranked = [
+        ActiveMarket(
+            inst_id=item.inst_id,
+            lever=item.lever,
+            delta_1h=0.0,
+            open_delta_15m=0.0,
+            qav_24h=item.qav_24h,
+        )
+        for item in sorted(instruments, key=lambda row: row.qav_24h, reverse=True)
+    ]
+    ignore_first = max(0, cfg.ignore_first)
+    max_markets = max(0, cfg.max_markets)
+    board: list[ActiveMarket] = []
+    for index, item in enumerate(ranked):
+        item.rank = index + 1
+        item.ignored = index < ignore_first
+        item.subscribed = (not item.ignored) and (index < ignore_first + max_markets)
+        if index >= ignore_first + max_markets:
+            break
+        board.append(item)
     return board

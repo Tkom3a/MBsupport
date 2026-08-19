@@ -3,12 +3,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+import sys
+import time
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 import aiohttp
 from aiohttp import web
 
-from .active_markets import ActiveMarket, rank_active_markets
+from .active_markets import ActiveMarket, board_from_qav, rank_active_markets
 from .config import AppConfig, load_config
 from .detector import BtcDeltaTracker, SymbolDetector
 from .okx_rest import OkxRest, apply_market_filters
@@ -30,6 +33,7 @@ class ShotCore:
             hints_name=cfg.output.hints_name,
             tz_name=cfg.web.timezone,
             distance_levels=cfg.shot.distance_levels,
+            retain_hours=cfg.output.retain_hours,
         )
         self.btc = BtcDeltaTracker(
             cfg.btc_filter.symbol,
@@ -102,7 +106,13 @@ class ShotCore:
         selected = apply_market_filters(instruments, self.cfg.market, self.cfg.filters)
         self.universe_size = len(selected)
         self.leverage = {item.inst_id: item.lever for item in instruments}
-        board = await rank_active_markets(rest, selected, self.cfg.active)
+        try:
+            board = await rank_active_markets(rest, selected, self.cfg.active)
+        except Exception as exc:
+            log.warning("Active-market ranking failed, fallback to QAV: %s", exc)
+            board = board_from_qav(selected, self.cfg.active)
+        if not board:
+            board = board_from_qav(selected, self.cfg.active)
         self.active_board = board
         symbols = [item.inst_id for item in board if item.subscribed]
         btc = self.cfg.btc_filter.symbol
@@ -115,7 +125,7 @@ class ShotCore:
         if symbols == self.active_symbols:
             return
         log.info(
-            "Universe refresh: pool %s → active %s (QAV %.0f…%.0f, lever x%.0f–x%.0f)",
+            "Universe refresh: pool %s -> active %s (QAV %.0f-%.0f, lever x%.0f-x%.0f)",
             len(selected),
             len(symbols),
             self.cfg.filters.qav_24h_min,
@@ -139,23 +149,44 @@ class ShotCore:
             except Exception as exc:
                 log.warning("Telegram send failed: %s", exc)
 
+    async def _retention_loop(self) -> None:
+        hours = self.cfg.output.retain_hours
+        interval = max(300, int(self.cfg.output.cleanup_sec))
+        while True:
+            try:
+                dropped = self.store.prune()
+                files = self.store.purge_sidecar_files()
+                logs_n = purge_old_logs(self.root / "logs", hours)
+                if dropped or files or logs_n:
+                    log.info(
+                        "Retention %sh: shots-%s files-%s logs-%s",
+                        hours,
+                        dropped,
+                        files,
+                        logs_n,
+                    )
+            except Exception as exc:
+                log.warning("Retention failed: %s", exc)
+            await asyncio.sleep(interval)
+
     async def run(self) -> None:
-        timeout = aiohttp.ClientTimeout(total=30)
+        timeout = aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=20)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             self._session = session
             runner = await self._start_web()
             tg_task = asyncio.create_task(self._telegram_worker())
+            retain_task = asyncio.create_task(self._retention_loop())
             try:
-                await self.refresh_universe()
                 while True:
-                    await asyncio.sleep(self.cfg.active.sort_sec)
                     try:
                         await self.refresh_universe()
                         if self.store.total:
                             self.store.write_hints(self.cfg.web.stats_lookback_min)
                     except Exception as exc:
                         log.warning("Universe refresh failed: %s", exc)
+                    await asyncio.sleep(self.cfg.active.sort_sec)
             finally:
+                retain_task.cancel()
                 tg_task.cancel()
                 await self.feed.stop()
                 await runner.cleanup()
@@ -166,20 +197,58 @@ class ShotCore:
         app = build_app(self)
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, self.cfg.web.host, self.cfg.web.port)
+        site = web.TCPSite(runner, self.cfg.web.host or "0.0.0.0", int(self.cfg.web.port), reuse_address=True)
         await site.start()
         log.info("Dashboard: http://%s:%s/", self.cfg.web.host, self.cfg.web.port)
         return runner
 
 
-def setup_logging(log_dir: Path) -> None:
+def purge_old_logs(log_dir: Path, retain_hours: int) -> int:
     log_dir.mkdir(parents=True, exist_ok=True)
+    cutoff = time.time() - max(1, retain_hours) * 3600
+    removed = 0
+    for path in log_dir.glob("*"):
+        if not path.is_file() or path.name == "shotcore.log":
+            continue
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink(missing_ok=True)
+                removed += 1
+        except OSError:
+            continue
+    return removed
+
+
+def setup_logging(log_dir: Path, retain_hours: int = 48) -> None:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    log_path = log_dir / "shotcore.log"
+    max_bytes = 40 * 1024 * 1024
+    if log_path.exists() and log_path.stat().st_size > max_bytes:
+        stamped = log_dir / ("shotcore.log." + time.strftime("%Y-%m-%d") + ".old")
+        try:
+            log_path.replace(stamped)
+        except OSError:
+            pass
+    purge_old_logs(log_dir, retain_hours)
     fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
     root = logging.getLogger()
     root.setLevel(logging.INFO)
     stream = logging.StreamHandler()
     stream.setFormatter(fmt)
-    file_handler = logging.FileHandler(log_dir / "shotcore.log", encoding="utf-8")
+    backups = max(2, int(retain_hours / 24) + 1)
+    file_handler = TimedRotatingFileHandler(
+        log_path,
+        when="midnight",
+        interval=1,
+        backupCount=backups,
+        encoding="utf-8",
+        delay=True,
+    )
     file_handler.setFormatter(fmt)
     root.handlers.clear()
     root.addHandler(stream)
@@ -189,7 +258,7 @@ def setup_logging(log_dir: Path) -> None:
 async def _amain(config_path: Path) -> None:
     cfg = load_config(config_path)
     root = config_path.parent if config_path.exists() else Path.cwd()
-    setup_logging(root / "logs")
+    setup_logging(root / "logs", retain_hours=cfg.output.retain_hours)
     core = ShotCore(cfg, root)
     log.info("ShotCore start, config=%s lookback=%smin", config_path, cfg.web.stats_lookback_min)
     stop = asyncio.Event()
@@ -204,9 +273,14 @@ async def _amain(config_path: Path) -> None:
         except NotImplementedError:
             pass
     task = asyncio.create_task(core.run())
+    task.add_done_callback(lambda _t: stop.set())
     await stop.wait()
-    task.cancel()
-    await asyncio.gather(task, return_exceptions=True)
+    if not task.done():
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    elif task.exception():
+        log.error("ShotCore stopped: %s", task.exception())
+        raise task.exception()
 
 
 def main() -> None:

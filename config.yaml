@@ -61,6 +61,8 @@ output:
   csv_name: shots.csv
   jsonl_name: shots.jsonl
   hints_name: distance_hints.csv
+  retain_hours: 48
+  cleanup_sec: 3600
 
 web:
   host: 0.0.0.0
