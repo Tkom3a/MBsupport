@@ -1,0 +1,22 @@
+services:
+  shotcore:
+    build: .
+    container_name: shotcore
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${WEB_PORT:-8787}:8787"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      TZ: ${TZ:-Europe/Moscow}
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: "8787"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/health')"]
+      interval: 20s
+      timeout: 5s
+      retries: 8
+      start_period: 20s

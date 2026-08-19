@@ -1,0 +1,54 @@
+# ShotCore — соседнее ядро рядом с MTCore.
+# Только публичный рынок OKX, ордера не выставляет.
+# Фильтры по умолчанию сняты с живых Shots Group в профиле OKXoma.
+
+exchange:
+  rest: https://www.okx.com
+  ws_public: wss://ws.okx.com:8443/ws/v5/public
+  inst_type: SWAP
+  quote: USDT
+
+# Пустой whitelist = все SWAP-USDT, прошедшие фильтры (как Market Live у MT).
+# Если заполнить — ядро смотрит только эти пары (формат OKX: BTC-USDT-SWAP).
+market:
+  whitelist: []
+  blacklist: []
+  refresh_sec: 30
+  ws_batch_size: 80
+  symbols_per_connection: 180
+
+filters:
+  qav_24h_min: 5000000
+  qav_24h_max: 2000000000
+  tick_size_pct_max: 0.25
+  mark_dev_pct_max: 2.0
+  min_leverage: 20
+
+# Прострел: импульс цены от опорной (цена до окна) до экстремума внутри окна.
+# min_percent=0.80 ловит движения, которые не дотягивают до текущих Distance 1.11–1.78.
+shot:
+  windows_ms: [300, 1000, 3000]
+  min_percent: 0.80
+  min_trades: 2
+  min_quote_volume: 200
+  cooldown_ms: 2500
+  recover_ratio: 0.35
+
+# Как deltaFilterList в MT: BTC-USDT-SWAP, 60с, ±0.6%.
+# Ядро пишет ВСЕ прострелы, поле btc_calm показывает, прошёл бы фильтр MT.
+btc_filter:
+  symbol: BTC-USDT-SWAP
+  window_sec: 60
+  range_pct: 0.6
+
+output:
+  dir: data
+  csv_name: shots.csv
+  jsonl_name: shots.jsonl
+  hints_name: distance_hints.csv
+
+web:
+  host: 0.0.0.0
+  port: 8787
+  timezone: Europe/Moscow
+  stats_lookback_min: 1440

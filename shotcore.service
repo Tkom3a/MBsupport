@@ -1,0 +1,16 @@
+[Unit]
+Description=ShotCore OKX futures shot logger
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/shotcore
+ExecStart=/opt/shotcore/.venv/bin/python -m shotcore --config /opt/shotcore/config.yaml
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/opt/shotcore/.env
+
+[Install]
+WantedBy=multi-user.target

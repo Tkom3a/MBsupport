@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ShotCore — прострелы</title>
+  <style>
+    :root {
+      --bg: #0c0e12;
+      --panel: #151922;
+      --line: #262c38;
+      --text: #d7deea;
+      --muted: #8b95a8;
+      --down: #e15b64;
+      --up: #4fba7a;
+      --amber: #d7a13b;
+      --chip: #1d2430;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 "Segoe UI", system-ui, sans-serif; }
+    header {
+      display: flex; justify-content: space-between; align-items: flex-end; gap: 16px;
+      padding: 20px 24px 12px; border-bottom: 1px solid var(--line);
+    }
+    h1 { margin: 0; font-size: 20px; letter-spacing: 0.04em; font-weight: 650; }
+    h1 span { color: var(--amber); }
+    .meta { color: var(--muted); font-size: 12px; }
+    .live { display: inline-flex; align-items: center; gap: 6px; color: var(--up); font-variant-numeric: tabular-nums; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--up); box-shadow: 0 0 0 4px #4fba7a22; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 24px; align-items: center; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 24px 12px; }
+    .chip, select, input, button {
+      background: var(--chip); color: var(--text); border: 1px solid var(--line);
+      border-radius: 6px; padding: 7px 10px; font: inherit;
+    }
+    .chip { color: var(--muted); font-size: 12px; }
+    .chip b { color: var(--text); font-weight: 600; }
+    input { min-width: 180px; }
+    .grid { display: grid; grid-template-columns: 1.7fr 0.9fr; gap: 16px; padding: 0 24px 24px; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+    th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
+    td:first-child, th:first-child { text-align: left; font-family: ui-monospace, Consolas, monospace; }
+    tbody tr:hover { background: #1c2230; }
+    .down { color: var(--down); }
+    .up { color: var(--up); }
+    .amber { color: var(--amber); font-weight: 650; }
+    .feed { max-height: 72vh; overflow: auto; }
+    .feed-item { display: grid; grid-template-columns: 92px 1fr auto; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+    .empty { padding: 28px; color: var(--muted); }
+    @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } header { flex-direction: column; align-items: flex-start; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Shot<span>Core</span> — средние прострелы</h1>
+      <div class="meta" id="subtitle">Загрузка фильтров…</div>
+    </div>
+    <div class="live"><span class="dot"></span><span id="live">ожидание данных</span></div>
+  </header>
+  <div class="toolbar">
+    <select id="lookback">
+      <option value="15">15 минут</option>
+      <option value="60">1 час</option>
+      <option value="360">6 часов</option>
+      <option value="1440" selected>24 часа</option>
+      <option value="0">Всё время</option>
+    </select>
+    <select id="direction">
+      <option value="">Все стороны</option>
+      <option value="DOWN">Только DOWN</option>
+      <option value="UP">Только UP</option>
+    </select>
+    <label class="chip"><input type="checkbox" id="btcCalm" /> только спокойный BTC</label>
+    <input id="search" placeholder="поиск пары, например SOL" />
+  </div>
+  <div class="chips" id="chips"></div>
+  <div class="grid">
+    <section class="panel">
+      <table>
+        <thead>
+          <tr>
+            <th>Пара</th>
+            <th>N</th>
+            <th>Средний %</th>
+            <th>DOWN</th>
+            <th>UP</th>
+            <th>P70 дистанция</th>
+            <th>Макс</th>
+            <th>Последний</th>
+          </tr>
+        </thead>
+        <tbody id="rows"><tr><td class="empty" colspan="8">Пока нет прострелов в выбранном окне</td></tr></tbody>
+      </table>
+    </section>
+    <section class="panel feed" id="feed"></section>
+  </div>
+  <script>
+    const qs = new URLSearchParams(location.search);
+    const token = qs.get("token");
+    const lookbackEl = document.getElementById("lookback");
+    const directionEl = document.getElementById("direction");
+    const btcCalmEl = document.getElementById("btcCalm");
+    const searchEl = document.getElementById("search");
+    const savedLookback = localStorage.getItem("shotcore_lookback");
+    if (savedLookback != null) lookbackEl.value = savedLookback;
+
+    function api(path) {
+      const url = new URL(path, location.origin);
+      if (token) url.searchParams.set("token", token);
+      for (const [k, v] of new URLSearchParams(path.split("?")[1] || "")) url.searchParams.set(k, v);
+      return fetch(url, { cache: "no-store" }).then(r => {
+        if (!r.ok) throw new Error(r.statusText);
+        return r.json();
+      });
+    }
+
+    function fmt(n) { return Number(n).toFixed(2); }
+    function dirClass(d) { return d === "UP" ? "up" : "down"; }
+
+    async function tick() {
+      const lookback = lookbackEl.value;
+      const direction = directionEl.value;
+      const btcCalm = btcCalmEl.checked ? "1" : "0";
+      localStorage.setItem("shotcore_lookback", lookback);
+      const q = `lookback=${lookback}&direction=${direction}&btc_calm=${btcCalm}`;
+      const [stats, shots] = await Promise.all([
+        api("/api/stats?" + q),
+        api("/api/shots?" + q + "&limit=60"),
+      ]);
+      const f = stats.filters || {};
+      document.getElementById("live").textContent =
+        `${stats.symbols_watched || 0} пар · ${stats.shots} прострелов · среднее ${fmt(stats.avg)}%`;
+      document.getElementById("subtitle").textContent =
+        `${f.inst_type} ${f.quote} · QAV ${f.qav_24h_min}–${f.qav_24h_max} · min ${f.shot_min_percent}% · BTC ±${f.btc_range_pct}% / ${f.btc_window_sec}с · ${f.timezone}`;
+      document.getElementById("chips").innerHTML = [
+        ["QAV min", f.qav_24h_min],
+        ["QAV max", f.qav_24h_max],
+        ["Tick %", f.tick_size_pct_max],
+        ["Mark %", f.mark_dev_pct_max],
+        ["Leverage ≥", f.min_leverage],
+        ["Окна мс", (f.shot_windows_ms || []).join(" / ")],
+        ["Whitelist", (f.whitelist || []).length ? f.whitelist.length + " шт" : "все"],
+      ].map(([k, v]) => `<span class="chip">${k}: <b>${v}</b></span>`).join("");
+
+      const needle = searchEl.value.trim().toLowerCase();
+      const rows = (stats.rows || []).filter(r => !needle || r.symbol.toLowerCase().includes(needle));
+      const body = document.getElementById("rows");
+      if (!rows.length) {
+        body.innerHTML = `<tr><td class="empty" colspan="8">Нет прострелов по текущим фильтрам и времени</td></tr>`;
+      } else {
+        body.innerHTML = rows.map(r => `
+          <tr>
+            <td>${r.symbol}</td>
+            <td>${r.count}</td>
+            <td class="amber">${fmt(r.avg)}</td>
+            <td class="down">${r.count_down ? fmt(r.avg_down) : "—"}</td>
+            <td class="up">${r.count_up ? fmt(r.avg_up) : "—"}</td>
+            <td class="amber">${fmt(r.suggest_distance)}</td>
+            <td>${fmt(r.max)}</td>
+            <td class="${dirClass(r.last_direction)}">${r.last_direction} ${fmt(r.last_percent)} · ${r.last_time}</td>
+          </tr>`).join("");
+      }
+      document.getElementById("feed").innerHTML = (shots.shots || []).map(s => `
+        <div class="feed-item">
+          <div class="meta">${s.time}</div>
+          <div>${s.symbol}</div>
+          <div class="${dirClass(s.direction)}">${s.direction} ${fmt(s.percent)}%</div>
+        </div>`).join("") || `<div class="empty">Лента пустая</div>`;
+    }
+
+    ["change", "input"].forEach(ev => {
+      lookbackEl.addEventListener(ev, () => tick().catch(console.error));
+      directionEl.addEventListener(ev, () => tick().catch(console.error));
+      btcCalmEl.addEventListener(ev, () => tick().catch(console.error));
+      searchEl.addEventListener(ev, () => tick().catch(console.error));
+    });
+    tick().catch(err => { document.getElementById("live").textContent = "ошибка: " + err.message; });
+    setInterval(() => tick().catch(console.error), 2500);
+  </script>
+</body>
+</html>
