@@ -176,6 +176,7 @@ async def _chart(request: web.Request) -> web.Response:
         payload = {"bar": "tick", "candles": candles, "shot": shot}
         if shot_row:
             payload["shot"]["path"] = shot_row.get("path") or []
+            payload["shot"]["distance_report"] = shot_row.get("distance_report") or []
         if candles or payload["shot"].get("path"):
             _chart_cache[key] = (time.monotonic(), payload)
             if len(_chart_cache) > _CHART_MAX:

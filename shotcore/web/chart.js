@@ -4,25 +4,35 @@
   const GRID = "#243044";
   const MUTED = "#8b95a8";
   const TEXT = "#d7deea";
-  const BLUE = "#5aa8ff";
-  const PURPLE = "rgba(128, 90, 196, 0.18)";
-  const PURPLE_LINE = "rgba(190, 160, 230, 0.85)";
+  const BLUE = "#4aa3ff";
+  const ORANGE = "#d7a13b";
+  const PURPLE_FILL = "rgba(120, 80, 190, 0.14)";
+  const PURPLE_LINE = "#c4a6f0";
 
   function $(id) { return document.getElementById(id); }
   function fmt(n, d) { return Number(n).toFixed(d == null ? 2 : d); }
 
   function fmtPx(n) {
     const v = Number(n);
-    if (!v) return "—";
+    if (!v && v !== 0) return "—";
     if (v >= 100) return fmt(v, 2);
     if (v >= 1) return fmt(v, 4);
+    if (v >= 0.01) return fmt(v, 5);
+    return fmt(v, 6);
+  }
+
+  function fmtDeltaAbs(n) {
+    const v = Math.abs(Number(n) || 0);
+    if (v >= 1) return fmt(v, 4);
+    if (v >= 0.01) return fmt(v, 5);
     return fmt(v, 6);
   }
 
   function fmtVol(n) {
     const v = Number(n) || 0;
+    if (v <= 0) return "—";
     if (v >= 1e6) return fmt(v / 1e6, 2) + "M";
-    if (v >= 1e3) return fmt(v / 1e3, 1) + "k";
+    if (v >= 1e3) return fmt(v / 1e3, 2) + "K";
     return fmt(v, v >= 10 ? 0 : 2);
   }
 
@@ -46,59 +56,69 @@
     const fake = [];
     (candles || []).forEach((c) => {
       fake.push({ ts: c.ts, price: c.o, side: -1, qty: 0 });
-      fake.push({ ts: c.ts + 200, price: c.h, side: 1, qty: 0 });
-      fake.push({ ts: c.ts + 400, price: c.l, side: -1, qty: 0 });
-      fake.push({ ts: c.ts + 700, price: c.c, side: c.c >= c.o ? 1 : -1, qty: c.vol || 0 });
+      fake.push({ ts: c.ts + 150, price: c.h, side: 1, qty: 0 });
+      fake.push({ ts: c.ts + 300, price: c.l, side: -1, qty: 0 });
+      fake.push({ ts: c.ts + 500, price: c.c, side: c.c >= c.o ? 1 : -1, qty: c.vol || 0 });
     });
     return fake;
   }
 
-  function orderPrice(shot) {
+  function fillsOf(shot, ticks) {
     const start = Number(shot.start_price) || 0;
-    const dist = Number(shot.suggest_distance) || 0;
-    if (Number(shot.fill_price) > 0) return Number(shot.fill_price);
-    if (!start || !dist) return 0;
-    return shot.direction === "UP" ? start * (1 + dist / 100) : start * (1 - dist / 100);
-  }
-
-  function fillTsOf(shot, ticks, fillPx) {
-    if (Number(shot.fill_ts) > 0) return Number(shot.fill_ts);
+    const holdMs = Math.max(50, Number(shot.hold_ms) || 300);
     const startTs = Number(shot.start_ts) || 0;
-    for (let i = 0; i < ticks.length; i++) {
-      const t = ticks[i];
-      if (startTs && t.ts < startTs) continue;
-      if (shot.direction === "UP" && t.price >= fillPx) return t.ts;
-      if (shot.direction !== "UP" && t.price <= fillPx) return t.ts;
+    const rows = Array.isArray(shot.distance_report) ? shot.distance_report.filter((r) => r && r.filled) : [];
+    const out = [];
+    const add = (row) => {
+      const dist = Number(row.distance || 0);
+      const fillPx = Number(row.fill_price) || (start
+        ? (shot.direction === "UP" ? start * (1 + dist / 100) : start * (1 - dist / 100))
+        : 0);
+      if (!fillPx) return;
+      let fillTs = Number(row.fill_ts) || 0;
+      if (!fillTs) {
+        for (let i = 0; i < ticks.length; i++) {
+          if (startTs && ticks[i].ts < startTs) continue;
+          if (shot.direction === "UP" && ticks[i].price >= fillPx) { fillTs = ticks[i].ts; break; }
+          if (shot.direction !== "UP" && ticks[i].price <= fillPx) { fillTs = ticks[i].ts; break; }
+        }
+      }
+      const closeTs = fillTs + holdMs;
+      let closePx = Number(row.exit_price) || 0;
+      if (!closePx) {
+        for (let i = 0; i < ticks.length; i++) {
+          if (ticks[i].ts <= closeTs) closePx = ticks[i].price;
+        }
+      }
+      out.push({ dist, fillPx, fillTs, closeTs, closePx: closePx || fillPx });
+    };
+    rows.forEach(add);
+    if (!out.length && (Number(shot.fill_price) || Number(shot.suggest_distance))) {
+      add({
+        distance: shot.suggest_distance,
+        fill_price: shot.fill_price,
+        fill_ts: shot.fill_ts,
+        exit_price: shot.exit_price,
+        filled: true,
+      });
     }
-    return Number(shot.peak_ts) || (ticks[0] && ticks[0].ts) || 0;
-  }
-
-  function priceAt(ticks, ts, fallback) {
-    let chosen = fallback;
-    for (let i = 0; i < ticks.length; i++) {
-      if (ticks[i].ts <= ts) chosen = ticks[i].price;
-      else return chosen;
-    }
-    return chosen;
+    return out;
   }
 
   function triangle(ctx, x, y, up, color) {
     ctx.beginPath();
     ctx.fillStyle = color;
     if (up) {
-      ctx.moveTo(x, y - 9);
-      ctx.lineTo(x - 6, y + 5);
-      ctx.lineTo(x + 6, y + 5);
+      ctx.moveTo(x, y - 8);
+      ctx.lineTo(x - 5.5, y + 5);
+      ctx.lineTo(x + 5.5, y + 5);
     } else {
-      ctx.moveTo(x, y + 9);
-      ctx.lineTo(x - 6, y - 5);
-      ctx.lineTo(x + 6, y - 5);
+      ctx.moveTo(x, y + 8);
+      ctx.lineTo(x - 5.5, y - 5);
+      ctx.lineTo(x + 5.5, y - 5);
     }
     ctx.closePath();
     ctx.fill();
-    ctx.strokeStyle = "#0b0d12";
-    ctx.lineWidth = 0.8;
-    ctx.stroke();
   }
 
   function niceStep(range) {
@@ -112,43 +132,33 @@
   function drawMtChart(canvas, shot, ticks, cssW, cssH, dpr) {
     const ctx = canvas.getContext("2d");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const padL = 78, padR = 72, padT = 16, padB = 24;
+    const padL = 84, padR = 78, padT = 14, padB = 26;
     const plotW = cssW - padL - padR;
     const plotH = cssH - padT - padB;
 
     const startPx = Number(shot.start_price) || ticks[0].price;
     const extPx = Number(shot.extreme_price) || ticks[ticks.length - 1].price;
-    const fillPx = orderPrice(shot);
-    const holdMs = Math.max(50, Number(shot.hold_ms) || 300);
     const startTs = Number(shot.start_ts) || ticks[0].ts;
     const peakTs = Number(shot.peak_ts) || startTs;
-    const fillTs = fillTsOf(shot, ticks, fillPx);
-    const closeTs = fillTs + holdMs;
-    const closePx = Number(shot.exit_price) || priceAt(ticks, closeTs, fillPx);
+    const fills = fillsOf(shot, ticks);
 
-    const sel0 = startTs;
-    const sel1 = startTs + 1000;
-    const view0 = sel0 - 700;
-    const view1 = Math.max(sel1, closeTs) + 900;
-    const t0 = view0;
-    const t1 = view1;
+    const view0 = Math.min(startTs, peakTs) - 1500;
+    const lastClose = fills.reduce((m, f) => Math.max(m, f.closeTs || 0), peakTs);
+    const view1 = Math.max(peakTs, lastClose) + 1800;
 
-    const visible = ticks.filter((t) => t.ts >= view0 - 50 && t.ts <= view1 + 50);
-    const use = visible.length ? visible : ticks;
-    const prices = use.map((t) => t.price);
-    if (startPx) prices.push(startPx);
-    if (extPx) prices.push(extPx);
-    if (fillPx) prices.push(fillPx);
-    if (closePx) prices.push(closePx);
+    const use = ticks.filter((t) => t.ts >= view0 && t.ts <= view1);
+    const draw = use.length ? use : ticks;
+    const prices = draw.map((t) => t.price).concat([startPx, extPx]);
+    fills.forEach((f) => { prices.push(f.fillPx); prices.push(f.closePx); });
     let pMax = Math.max.apply(null, prices);
     let pMin = Math.min.apply(null, prices);
-    const pad = (pMax - pMin) * 0.16 || pMax * 0.002;
+    const pad = (pMax - pMin) * 0.14 || pMax * 0.002;
     pMax += pad;
     pMin -= pad;
 
     function xAt(ts) {
-      if (t1 <= t0) return padL + plotW / 2;
-      return padL + (ts - t0) / (t1 - t0) * plotW;
+      if (view1 <= view0) return padL + plotW / 2;
+      return padL + (ts - view0) / (view1 - view0) * plotW;
     }
     function yAt(p) { return padT + (pMax - p) / (pMax - pMin) * plotH; }
     function pctOf(p) { return startPx ? (p - startPx) / startPx * 100 : 0; }
@@ -175,124 +185,138 @@
       ctx.textAlign = "right";
       ctx.fillText(fmtPx(price), padL - 8, y + 4);
       ctx.textAlign = "left";
-      const nearFill = fillPx && Math.abs(pct - pctOf(fillPx)) < step * 0.35;
-      ctx.fillStyle = nearFill ? UP : MUTED;
       ctx.fillText((pct >= 0 ? "+" : "") + fmt(pct, step < 0.5 ? 2 : 1) + "%", padL + plotW + 8, y + 4);
     }
 
-    const xSel0 = xAt(sel0);
-    const xSel1 = xAt(sel1);
-    const yTop = yAt(startPx);
-    const yBot = yAt(extPx);
-    ctx.fillStyle = PURPLE;
-    ctx.fillRect(xSel0, padT, Math.max(8, xSel1 - xSel0), plotH);
-    ctx.strokeStyle = PURPLE_LINE;
-    ctx.lineWidth = 1.4;
-    ctx.strokeRect(xSel0, padT, Math.max(8, xSel1 - xSel0), plotH);
+    const xShot = xAt(peakTs);
+    const yStart = yAt(startPx);
+    const yExt = yAt(extPx);
+    ctx.fillStyle = PURPLE_FILL;
+    ctx.fillRect(xAt(startTs) - 2, padT, Math.max(6, xShot - xAt(startTs) + 4), plotH);
 
+    ctx.strokeStyle = PURPLE_LINE;
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.strokeStyle = "#efe8ff";
-    ctx.lineWidth = 1.2;
-    ctx.setLineDash([4, 3]);
-    ctx.moveTo(xSel0, yTop);
-    ctx.lineTo(xSel1, yBot);
+    ctx.moveTo(xShot, yStart);
+    ctx.lineTo(xShot, yExt);
+    ctx.stroke();
+    ctx.fillStyle = PURPLE_LINE;
+    ctx.beginPath(); ctx.arc(xShot, yStart, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(xShot, yExt, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#1a1228";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(xShot, yStart, 5, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(xShot, yExt, 5, 0, Math.PI * 2); ctx.stroke();
+
+    ctx.setLineDash([5, 4]);
+    ctx.strokeStyle = ORANGE;
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.moveTo(padL, yStart);
+    ctx.lineTo(padL + plotW, yStart);
     ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = "#efe8ff";
-    ctx.beginPath(); ctx.arc(xSel0, yTop, 4, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(xSel1, yBot, 4, 0, Math.PI * 2); ctx.fill();
 
-    use.forEach((t) => {
+    ctx.beginPath();
+    ctx.strokeStyle = "#9aa3b5";
+    ctx.lineWidth = 1;
+    ctx.lineJoin = "round";
+    draw.forEach((t, i) => {
+      const x = xAt(t.ts);
+      const y = yAt(t.price);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    draw.forEach((t) => {
       ctx.beginPath();
       ctx.fillStyle = t.side > 0 ? UP : DOWN;
-      ctx.arc(xAt(t.ts), yAt(t.price), 2.2, 0, Math.PI * 2);
+      ctx.arc(xAt(t.ts), yAt(t.price), 2.1, 0, Math.PI * 2);
       ctx.fill();
     });
 
-    if (fillPx) {
-      ctx.setLineDash([5, 4]);
+    const openUp = shot.direction !== "UP";
+    fills.forEach((f) => {
+      if (!f.fillPx || !f.fillTs) return;
+      ctx.setLineDash([4, 3]);
       ctx.strokeStyle = UP;
-      ctx.lineWidth = 1.4;
+      ctx.lineWidth = 1.3;
       ctx.beginPath();
-      ctx.moveTo(padL, yAt(fillPx));
-      ctx.lineTo(padL + plotW, yAt(fillPx));
+      ctx.moveTo(padL, yAt(f.fillPx));
+      ctx.lineTo(padL + plotW, yAt(f.fillPx));
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle = UP;
       ctx.font = "bold 11px Segoe UI, sans-serif";
       ctx.textAlign = "left";
-      ctx.fillText("ордер " + fmt(shot.suggest_distance || 0, 2) + "%", padL + 8, yAt(fillPx) - 8);
-    }
+      ctx.fillText(fmt(f.dist, 2) + "%", padL + 8, yAt(f.fillPx) - 6);
 
-    if (fillPx && fillTs) {
-      const xOpen = xAt(fillTs);
-      const xClose = xAt(closeTs);
-      const yOpen = yAt(fillPx);
-      const yClose = yAt(closePx);
-      ctx.strokeStyle = "rgba(90, 168, 255, 0.85)";
-      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = "rgba(74,163,255,0.8)";
+      ctx.lineWidth = 1.3;
       ctx.beginPath();
-      ctx.moveTo(xOpen, yOpen);
-      ctx.lineTo(xClose, yClose);
+      ctx.moveTo(xAt(f.fillTs), yAt(f.fillPx));
+      ctx.lineTo(xAt(f.closeTs), yAt(f.closePx));
       ctx.stroke();
-      const openUp = shot.direction !== "UP";
-      triangle(ctx, xOpen, yOpen, openUp, UP);
-      triangle(ctx, xClose, yClose, !openUp, BLUE);
-    }
-
-    const inside = ticks.filter((t) => t.ts >= sel0 && t.ts <= sel1);
-    let buyQty = 0, sellQty = 0;
-    inside.forEach((t) => {
-      const q = t.qty || 0;
-      if (t.side > 0) buyQty += q;
-      else sellQty += q;
+      triangle(ctx, xAt(f.fillTs), yAt(f.fillPx), openUp, UP);
+      triangle(ctx, xAt(f.closeTs), yAt(f.closePx), !openUp, BLUE);
     });
-    const firstIn = inside[0] ? inside[0].price : startPx;
-    const lastIn = inside.length ? inside[inside.length - 1].price : extPx;
-    const extremeIn = shot.direction === "UP"
-      ? Math.max.apply(null, inside.map((t) => t.price).concat([firstIn]))
-      : Math.min.apply(null, inside.map((t) => t.price).concat([firstIn]));
-    const dAbs = extremeIn - firstIn;
-    const dPct = firstIn ? dAbs / firstIn * 100 : 0;
-    const boxW = 228;
-    const boxH = 118;
-    let boxX = xSel0 + 10;
-    if (boxX + boxW > padL + plotW - 8) boxX = padL + plotW - boxW - 8;
-    const boxY = padT + plotH - boxH - 8;
-    ctx.fillStyle = "rgba(62, 42, 110, 0.92)";
+
+    const shotTicks = ticks.filter((t) => t.ts >= startTs && t.ts <= peakTs + 50);
+    let buyQty = 0, sellQty = 0;
+    shotTicks.forEach((t) => {
+      if (t.side > 0) buyQty += t.qty || 0;
+      else sellQty += t.qty || 0;
+    });
+    const dAbs = extPx - startPx;
+    const dPct = startPx ? dAbs / startPx * 100 : 0;
+    const durMs = Math.max(0, peakTs - startTs);
+    const timeLabel = durMs < 400 ? "0 сек" : (durMs < 1000 ? durMs + " мс" : fmt(durMs / 1000, 1) + " сек");
+    const boxW = 248;
+    const boxH = 124;
+    let boxX = xShot + 14;
+    if (boxX + boxW > padL + plotW - 6) boxX = xShot - boxW - 14;
+    if (boxX < padL + 6) boxX = padL + 6;
+    const boxY = Math.min(Math.max(yExt, yStart) + 10, padT + plotH - boxH - 6);
+    ctx.fillStyle = "rgba(58, 36, 102, 0.94)";
     ctx.strokeStyle = PURPLE_LINE;
     ctx.lineWidth = 1;
     ctx.fillRect(boxX, boxY, boxW, boxH);
     ctx.strokeRect(boxX, boxY, boxW, boxH);
+    const rows = [
+      ["Время", timeLabel],
+      ["Исходная цена", fmtPx(startPx)],
+      ["Изменение цены", (dAbs >= 0 ? "+" : "−") + fmtDeltaAbs(dAbs) + ", " + (dPct >= 0 ? "+" : "") + fmt(dPct, 2) + "%"],
+      ["Объём покупок", fmtVol(buyQty)],
+      ["Объём продаж", fmtVol(sellQty)],
+      ["Общий объём", fmtVol(buyQty + sellQty)],
+    ];
     ctx.font = "12px Segoe UI, sans-serif";
     ctx.textAlign = "left";
-    const lines = [
-      ["Время", "1 сек  ·  " + inside.length + " тик."],
-      ["Исходная цена", fmtPx(firstIn)],
-      ["Изменение цены", (dPct >= 0 ? "+" : "") + fmt(dPct, 2) + "%"],
-      ["Объём покупок", fmtVol(buyQty) || "—"],
-      ["Объём продаж", fmtVol(sellQty) || "—"],
-      ["Общий объём", fmtVol(buyQty + sellQty) || "—"],
-    ];
-    lines.forEach((row, i) => {
+    rows.forEach((row, i) => {
       ctx.fillStyle = MUTED;
-      ctx.fillText(row[0], boxX + 10, boxY + 18 + i * 16);
+      ctx.fillText(row[0], boxX + 10, boxY + 18 + i * 17);
       ctx.fillStyle = i === 2 ? (dPct >= 0 ? UP : DOWN) : TEXT;
-      ctx.fillText(row[1], boxX + 118, boxY + 18 + i * 16);
+      ctx.fillText(row[1], boxX + 122, boxY + 18 + i * 17);
     });
 
     ctx.fillStyle = MUTED;
     ctx.font = "10px Segoe UI, sans-serif";
     ctx.textAlign = "center";
-    const marks = [t0, sel0, sel1, t1];
-    marks.forEach((ts) => ctx.fillText(fmtTime(ts), xAt(ts), cssH - 6));
+    const marks = [view0, startTs, peakTs, view1];
+    const seen = {};
+    marks.forEach((ts) => {
+      const label = fmtTime(ts);
+      if (seen[label]) return;
+      seen[label] = 1;
+      ctx.fillText(label, xAt(ts), cssH - 7);
+    });
 
     canvas.onmousemove = function (ev) {
       const rect = canvas.getBoundingClientRect();
       const x = ev.clientX - rect.left;
-      let best = use[0];
+      let best = draw[0];
       let bestD = 1e9;
-      use.forEach((t) => {
+      draw.forEach((t) => {
         const d = Math.abs(xAt(t.ts) - x);
         if (d < bestD) { bestD = d; best = t; }
       });
@@ -300,7 +324,7 @@
       $("chartHint").textContent =
         `${fmtTime(best.ts)}  ${fmtPx(best.price)}  ${best.side > 0 ? "buy" : "sell"}` +
         (best.qty ? `  qty ${fmtVol(best.qty)}` : "") +
-        `  ·  в рамке 1с: ${inside.length} тик.`;
+        `  ·  линейка ${fmt(shot.percent || 0, 2)}%  ·  тиков в простреле ${shotTicks.length}`;
     };
   }
 
@@ -311,8 +335,7 @@
       `${shot.symbol || ""} <span class="${cls}">${dir} ${fmt(shot.percent || 0)}%</span>` +
       ` <span class="meta">${shot.time || ""} · тики</span>`;
     $("chartSub").textContent =
-      `рамка 1 с  ·  ордер ${fmt(shot.suggest_distance || 0)}%` +
-      (shot.fill_price ? ` @ ${fmtPx(shot.fill_price)}` : "") +
+      `линейка дистанции ${fmt(shot.percent || 0, 2)}%  ·  ордер ${fmt(shot.suggest_distance || 0)}%` +
       `  ·  выход ${shot.hold_ms || 300} мс` +
       (shot.lever ? `  ·  x${Math.round(shot.lever)}` : "");
   }
@@ -322,8 +345,8 @@
     const shot = payload.shot || {};
     const ticks = ticksFromShot(shot, payload.candles || []);
     const wrap = canvas.parentElement;
-    const cssW = Math.max(640, wrap.clientWidth);
-    const cssH = 520;
+    const cssW = Math.max(720, wrap.clientWidth);
+    const cssH = 540;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     canvas.width = Math.floor(cssW * dpr);
     canvas.height = Math.floor(cssH * dpr);
@@ -336,7 +359,7 @@
       return;
     }
     $("chartHint").textContent =
-      "Фиолетовая рамка — ровно 1 секунда тиков. Зелёная стрелка — открытие ордера, синяя — закрытие через 0.3 с.";
+      "Фиолетовая линейка — дистанция прострела. Зелёная стрелка — открытие лимита, синяя — закрытие через 0.3 с.";
     drawMtChart(canvas, shot, ticks, cssW, cssH, dpr);
   }
 
