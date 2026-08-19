@@ -39,6 +39,7 @@ class ShotEvent:
     pnl_pct: float = 0.0
     suggest_distance: float = 0.0
     distance_report: list[dict[str, Any]] = field(default_factory=list)
+    lever: float = 0.0
 
 
 @dataclass
@@ -66,6 +67,7 @@ class SymbolDetector:
         cooldown_ms: int,
         recover_ratio: float,
         hold_ms: int = 300,
+        refractory_ms: int = 1_000
         distance_levels: list[float] | None = None,
         vplus_min_pnl: float = 0.0,
     ):
@@ -81,7 +83,11 @@ class SymbolDetector:
         self.vplus_min_pnl = vplus_min_pnl
         self.trades: Deque[Trade] = deque()
         self._open: dict[str, _OpenShot] = {}
-        self.max_keep_ms = max(self.windows_ms) + cooldown_ms + hold_ms + 1500
+        self._refractory_until: dict[str, int] = {}
+        self.max_keep_ms = max(self.windows_ms) + cooldown_ms + hold_ms + 20000
+        self.quiet_ms = max(hold_ms, 2000)
+        self.refractory_ms = max(refractory_ms, hold_ms)
+        self.max_shot_ms = 20000
 
     def on_trade(self, ts: int, price: float, qty: float, side: str) -> list[ShotEvent]:
         if price <= 0:
@@ -107,6 +113,11 @@ class SymbolDetector:
         for direction, (window_ms, pct, ref, extreme, count, qvol) in best.items():
             opened = self._open.get(direction)
             if opened is None:
+                locked = ts < self._refractory_until.get(direction, 0)
+                if locked:
+                    if pct < self.min_percent * 0.5:
+                        self._refractory_until.pop(direction, None)
+                    continue
                 if pct >= self.min_percent:
                     self._open[direction] = _OpenShot(
                         direction=direction,
@@ -124,28 +135,30 @@ class SymbolDetector:
                 opened.peak_pct = pct
                 opened.window_ms = window_ms
                 opened.extreme_price = extreme
-                opened.start_price = ref
                 opened.peak_ts = ts
                 opened.trades = count
                 opened.quote_volume = qvol
                 opened.peaked = False
 
+        for direction, opened in self._open.items():
+            span = abs(opened.start_price - opened.extreme_price)
+            if span <= 0:
+                continue
             if direction == "DOWN":
-                recover_price = opened.extreme_price * (1.0 + opened.peak_pct / 100.0 * self.recover_ratio)
-                recovered = price >= recover_price
+                recovered = price >= opened.extreme_price + span * self.recover_ratio
             else:
-                recover_price = opened.extreme_price * (1.0 - opened.peak_pct / 100.0 * self.recover_ratio)
-                recovered = price <= recover_price
-            if recovered or ts - opened.peak_ts >= self.cooldown_ms:
+                recovered = price <= opened.extreme_price - span * self.recover_ratio
+            quiet = ts - opened.peak_ts >= self.quiet_ms
+            timed_out = ts - opened.start_ts >= self.max_shot_ms and quiet
+            if (recovered and quiet) or timed_out:
                 opened.peaked = True
 
         closed: list[ShotEvent] = []
         for direction in list(self._open):
             opened = self._open[direction]
-            ready = opened.peaked or ts - opened.peak_ts >= self.cooldown_ms
-            waited = ts - opened.peak_ts >= self.hold_ms
-            if ready and waited:
+            if opened.peaked and ts - opened.peak_ts >= self.hold_ms:
                 closed.append(self._finish(opened, ts, price, metrics))
+                self._refractory_until[direction] = ts + self.refractory_ms
                 del self._open[direction]
         return closed
 

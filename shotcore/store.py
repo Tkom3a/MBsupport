@@ -39,6 +39,7 @@ CSV_FIELDS = [
     "pnl_pct",
     "suggest_distance",
     "distance_report",
+    "lever",
 ]
 
 
@@ -68,7 +69,7 @@ class ShotStore:
         if self.csv_path.exists():
             with self.csv_path.open(encoding="utf-8", errors="replace") as fh:
                 first = fh.readline()
-            if first and "vplus" in first and "suggest_distance" in first:
+            if first and "vplus" in first and "suggest_distance" in first and "lever" in first:
                 return
             backup = self.csv_path.with_suffix(".csv.bak")
             self.csv_path.replace(backup)
@@ -132,6 +133,7 @@ class ShotStore:
             "pnl_pct": event.pnl_pct,
             "suggest_distance": event.suggest_distance,
             "distance_report": json.dumps(event.distance_report, ensure_ascii=False),
+            "lever": event.lever,
         }
         stored = _row_to_event(row)
         if stored:
@@ -141,14 +143,13 @@ class ShotStore:
         with self.jsonl_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps({**row, "btc_calm": bool(event.btc_calm), "vplus": bool(event.vplus)}, ensure_ascii=False) + "\n")
         self.total += 1
-        mark = "В+" if event.vplus else "В−"
         log.info(
-            "SHOT %s %s %.2f%% dist=%.2f %s pnl=%.3f%% hold=%sms",
+            "SHOT %s %s x%.0f %.2f%% dist=%.2f pnl=%.3f%% hold=%sms",
             event.direction,
             event.symbol,
+            event.lever,
             event.percent,
             event.suggest_distance,
-            mark,
             event.pnl_pct,
             event.hold_ms,
         )
@@ -200,9 +201,10 @@ class ShotStore:
                     "last_vplus": bool(last["vplus"]),
                     "last_time": _fmt_local(last["peak_ts"], self.tz),
                     "last_ts": last["peak_ts"],
+                    "lever": float(last.get("lever") or 0),
                 }
             )
-        rows.sort(key=lambda row: (row["vplus_rate"], row["count"], row["avg"]), reverse=True)
+        rows.sort(key=lambda row: (row["count"], row["last_ts"]), reverse=True)
         all_pct = [float(x["percent"]) for x in items]
         vplus_n = sum(1 for x in items if x["vplus"])
         return {
@@ -253,6 +255,22 @@ class ShotStore:
                 continue
             out.append(item)
         return out
+
+    def find_shot(self, symbol: str, peak_ts: int) -> dict[str, Any] | None:
+        needle = (symbol or "").upper()
+        best: dict[str, Any] | None = None
+        best_dt = 15_000
+        for item in self.events:
+            if str(item.get("symbol") or "").upper() != needle:
+                continue
+            delta = abs(int(item["peak_ts"]) - int(peak_ts))
+            if delta < best_dt:
+                best_dt = delta
+                best = item
+        return best
+
+    def as_public(self, item: dict[str, Any]) -> dict[str, Any]:
+        return _public_event(item, self.tz)
 
 
 def _best_distance(shots: list[dict[str, Any]], levels: list[float]) -> tuple[float, list[dict[str, Any]]]:
@@ -312,6 +330,14 @@ def _public_event(item: dict[str, Any], tz: ZoneInfo) -> dict[str, Any]:
         "pnl_pct": item["pnl_pct"],
         "suggest_distance": item["suggest_distance"],
         "rollback_pct": item["rollback_pct"],
+        "lever": item.get("lever") or 0,
+        "peak_ts": item["peak_ts"],
+        "start_price": float(item.get("start_price") or 0),
+        "extreme_price": float(item.get("extreme_price") or 0),
+        "last_price": float(item.get("last_price") or 0),
+        "quote_volume": float(item.get("quote_volume") or 0),
+        "duration_ms": int(item.get("duration_ms") or 0),
+        "hold_ms": int(item.get("hold_ms") or 300),
     }
 
 
@@ -345,6 +371,12 @@ def _row_to_event(row: dict[str, Any]) -> dict[str, Any] | None:
             "suggest_distance": float(row.get("suggest_distance") or 0),
             "rollback_pct": float(row.get("rollback_pct") or 0),
             "distance_report": report,
+            "lever": float(row.get("lever") or 0),
+            "start_price": float(row.get("start_price") or 0),
+            "extreme_price": float(row.get("extreme_price") or 0),
+            "last_price": float(row.get("last_price") or 0),
+            "quote_volume": float(row.get("quote_volume") or 0),
+            "duration_ms": int(float(row.get("duration_ms") or 0)),
         }
     except (TypeError, ValueError):
         return None

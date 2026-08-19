@@ -13,7 +13,7 @@ exchange:
 market:
   whitelist: []
   blacklist: []
-  refresh_sec: 30
+  refresh_sec: 15
   ws_batch_size: 80
   symbols_per_connection: 180
 
@@ -23,9 +23,11 @@ filters:
   tick_size_pct_max: 0.25
   mark_dev_pct_max: 2.0
   min_leverage: 20
+  max_leverage: 100
 
 # Прострел: импульс цены от опорной (цена до окна) до экстремума внутри окна.
 # min_percent=0.80 ловит движения, которые не дотягивают до текущих Distance 1.11–1.78.
+# Один импульс = одно событие (refractory_ms после фиксации).
 shot:
   windows_ms: [300, 1000, 3000]
   min_percent: 0.80
@@ -34,8 +36,18 @@ shot:
   cooldown_ms: 2500
   recover_ratio: 0.35
   hold_ms: 300
+  refractory_ms: 1000
   distance_levels: [1.11, 1.32, 1.42, 1.63, 1.78]
   vplus_min_pnl: 0.0
+
+# Как «Фильтр активных рынков» в MoonTrader: 1ч Δ + 15м оΔ,
+# сортировка каждые 15 с, выкинуть первые 2, взять 25.
+active:
+  max_markets: 25
+  ignore_first: 2
+  sort_sec: 15
+  filter_1h_delta: true
+  filter_15m_open_delta: true
 
 # Как deltaFilterList в MT: BTC-USDT-SWAP, 60с, ±0.6%.
 # Ядро пишет ВСЕ прострелы, поле btc_calm показывает, прошёл бы фильтр MT.

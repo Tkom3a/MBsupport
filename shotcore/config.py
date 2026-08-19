@@ -33,6 +33,7 @@ class FilterConfig:
     tick_size_pct_max: float = 0.25
     mark_dev_pct_max: float = 2.0
     min_leverage: float = 20
+    max_leverage: float = 100
 
 
 @dataclass
@@ -44,8 +45,20 @@ class ShotConfig:
     cooldown_ms: int = 2500
     recover_ratio: float = 0.35
     hold_ms: int = 300
+    refractory_ms: int = 1_000
     distance_levels: list[float] = field(default_factory=lambda: [1.11, 1.32, 1.42, 1.63, 1.78])
     vplus_min_pnl: float = 0.0
+
+
+@dataclass
+class ActiveMarketsConfig:
+    """Как «Фильтр активных рынков» в MoonTrader."""
+
+    max_markets: int = 25
+    ignore_first: int = 2
+    sort_sec: int = 15
+    filter_1h_delta: bool = True
+    filter_15m_open_delta: bool = True
 
 
 @dataclass
@@ -85,6 +98,7 @@ class AppConfig:
     market: MarketConfig
     filters: FilterConfig
     shot: ShotConfig
+    active: ActiveMarketsConfig
     btc_filter: BtcFilterConfig
     web: WebConfig
     notify: NotifyConfig
@@ -161,6 +175,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     market = _load_section(MarketConfig, raw.get("market") or {})
     filters = _load_section(FilterConfig, raw.get("filters") or {})
     shot = _load_section(ShotConfig, raw.get("shot") or {})
+    active = _load_section(ActiveMarketsConfig, raw.get("active") or {})
     btc_filter = _load_section(BtcFilterConfig, raw.get("btc_filter") or {})
     output = _load_section(OutputConfig, raw.get("output") or {})
     web = _load_section(WebConfig, raw.get("web") or {})
@@ -196,6 +211,8 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         filters.mark_dev_pct_max = _as_float("MARK_DEV_PCT_MAX", filters.mark_dev_pct_max)
     if _env_filled("MIN_LEVERAGE"):
         filters.min_leverage = _as_float("MIN_LEVERAGE", filters.min_leverage)
+    if _env_filled("MAX_LEVERAGE"):
+        filters.max_leverage = _as_float("MAX_LEVERAGE", filters.max_leverage)
 
     if _env_filled("SHOT_WINDOWS_MS"):
         shot.windows_ms = _as_ints("SHOT_WINDOWS_MS", shot.windows_ms)
@@ -211,6 +228,15 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         shot.recover_ratio = _as_float("SHOT_RECOVER_RATIO", shot.recover_ratio)
     if _env_filled("HOLD_MS"):
         shot.hold_ms = _as_int("HOLD_MS", shot.hold_ms)
+    if _env_filled("SHOT_REFRACTORY_MS"):
+        shot.refractory_ms = _as_int("SHOT_REFRACTORY_MS", shot.refractory_ms)
+    if _env_filled("ACTIVE_MAX_MARKETS"):
+        active.max_markets = _as_int("ACTIVE_MAX_MARKETS", active.max_markets)
+    if _env_filled("ACTIVE_IGNORE_FIRST"):
+        active.ignore_first = _as_int("ACTIVE_IGNORE_FIRST", active.ignore_first)
+    if _env_filled("ACTIVE_SORT_SEC"):
+        active.sort_sec = _as_int("ACTIVE_SORT_SEC", active.sort_sec)
+        market.refresh_sec = active.sort_sec
     if _env_filled("DISTANCE_LEVELS"):
         shot.distance_levels = _as_floats("DISTANCE_LEVELS", shot.distance_levels)
     if _env_filled("VPLUS_MIN_PNL"):
@@ -246,6 +272,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         market=market,
         filters=filters,
         shot=shot,
+        active=active,
         btc_filter=btc_filter,
         web=web,
         notify=notify,
@@ -263,6 +290,12 @@ def public_filters(cfg: AppConfig) -> dict[str, Any]:
         "tick_size_pct_max": cfg.filters.tick_size_pct_max,
         "mark_dev_pct_max": cfg.filters.mark_dev_pct_max,
         "min_leverage": cfg.filters.min_leverage,
+        "max_leverage": cfg.filters.max_leverage,
+        "active_max_markets": cfg.active.max_markets,
+        "active_ignore_first": cfg.active.ignore_first,
+        "active_sort_sec": cfg.active.sort_sec,
+        "active_filter_1h": "1ч Δ" if cfg.active.filter_1h_delta else "",
+        "active_filter_15m": "15м оΔ" if cfg.active.filter_15m_open_delta else "",
         "whitelist": cfg.market.whitelist,
         "blacklist": cfg.market.blacklist,
         "shot_windows_ms": cfg.shot.windows_ms,

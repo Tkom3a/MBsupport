@@ -19,6 +19,7 @@
       --up: #4fba7a;
       --amber: #d7a13b;
       --chip: #1d2430;
+      --blue: #3d7eff;
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 "Segoe UI", system-ui, sans-serif; }
@@ -28,6 +29,7 @@
     }
     h1 { margin: 0; font-size: 20px; letter-spacing: 0.04em; font-weight: 650; }
     h1 span { color: var(--amber); }
+    h2 { margin: 0; font-size: 13px; color: var(--muted); font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
     .meta { color: var(--muted); font-size: 12px; }
     .live { display: inline-flex; align-items: center; gap: 6px; color: var(--up); font-variant-numeric: tabular-nums; }
     .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--up); box-shadow: 0 0 0 4px #4fba7a22; }
@@ -44,6 +46,24 @@
     .chip { color: var(--muted); font-size: 12px; }
     .chip b { color: var(--text); font-weight: 600; }
     input { min-width: 180px; }
+    .mt-wrap { display: grid; grid-template-columns: 1fr 1.15fr; gap: 16px; padding: 0 24px 16px; }
+    .mt-box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+    .mt-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-weight: 650; }
+    .mt-row {
+      display: grid; grid-template-columns: 22px 92px 1fr; gap: 8px; align-items: center;
+      background: #12161e; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 6px;
+    }
+    .mt-dd {
+      background: #1b2230; border: 1px solid #31405a; border-radius: 6px; padding: 5px 8px;
+      font-weight: 650; color: #c9d6ea; text-align: center;
+    }
+    .mt-nums { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+    .mt-num { background: #12161e; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+    .mt-num .lbl { color: var(--muted); font-size: 11px; }
+    .mt-num .val { font-size: 18px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+    .muted-row { opacity: 0.45; }
+    .tag { font-size: 11px; color: var(--muted); }
+    .tag.on { color: var(--up); }
     .grid { display: grid; grid-template-columns: 1.75fr 0.85fr; gap: 16px; padding: 0 24px 24px; }
     .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: auto; }
     table { width: 100%; border-collapse: collapse; }
@@ -55,11 +75,38 @@
     .up { color: var(--up); }
     .amber { color: var(--amber); font-weight: 650; }
     .feed { max-height: 72vh; overflow: auto; }
-    .feed-item { display: grid; grid-template-columns: 92px 1fr auto; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); align-items: center; }
+    .feed-item { display: grid; grid-template-columns: 92px 1fr auto; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); align-items: center; cursor: pointer; }
+    .feed-item:hover { background: #1c2230; }
+    tbody tr.clickable { cursor: pointer; }
     .empty { padding: 28px; color: var(--muted); }
     .note { padding: 0 24px 16px; color: var(--muted); font-size: 12px; }
+    .panel-head { display: flex; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+    .overlay {
+      display: none; position: fixed; inset: 0; background: #05070ccc; z-index: 40;
+      align-items: center; justify-content: center; padding: 24px;
+    }
+    .overlay.open { display: flex; }
+    .chart-box {
+      width: min(1100px, 100%); background: var(--panel); border: 1px solid var(--line);
+      border-radius: 12px; overflow: hidden; box-shadow: 0 18px 50px #0008;
+    }
+    .chart-head {
+      display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
+      padding: 12px 16px; border-bottom: 1px solid var(--line);
+    }
+    .chart-head h3 { margin: 0; font-size: 16px; font-weight: 650; }
+    .chart-x {
+      background: var(--chip); border: 1px solid var(--line); color: var(--text);
+      width: 32px; height: 32px; border-radius: 8px; cursor: pointer; font-size: 18px;
+    }
+    .chart-canvas-wrap { padding: 0 8px 8px; background: #10141c; }
+    #chartCanvas { display: block; width: 100%; height: 520px; }
+    #chartHint { padding: 8px 16px 12px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+    .empty { padding: 28px; color: var(--muted); }
+    .note { padding: 0 24px 16px; color: var(--muted); font-size: 12px; }
+    .panel-head { display: flex; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--line); }
     @media (max-width: 1100px) {
-      .grid, .kpis { grid-template-columns: 1fr; }
+      .grid, .kpis, .mt-wrap, .mt-nums { grid-template-columns: 1fr; }
       header { flex-direction: column; align-items: flex-start; }
     }
   </style>
@@ -68,14 +115,14 @@
   <header>
     <div>
       <h1>Shot<span>Core</span> — разведка дистанций</h1>
-      <div class="meta" id="subtitle">Ордер заранее → вход на простреле → выход через 0.3 с. KPI — В+</div>
+      <div class="meta" id="subtitle">Ордер заранее → вход на простреле → выход через 0.3 с</div>
     </div>
     <div class="live"><span class="dot"></span><span id="live">ожидание данных</span></div>
   </header>
   <div class="kpis">
     <div class="kpi"><div class="lbl">Пары с прострелами</div><div class="val" id="kpiPairs">—</div></div>
     <div class="kpi"><div class="lbl">Прострелов</div><div class="val" id="kpiShots">—</div></div>
-    <div class="kpi"><div class="lbl">В+ после 0.3 с</div><div class="val up" id="kpiVplus">—</div></div>
+    <div class="kpi"><div class="lbl">Активных рынков</div><div class="val" id="kpiActive">—</div></div>
     <div class="kpi"><div class="lbl">Следим пар</div><div class="val" id="kpiWatch">—</div></div>
   </div>
   <div class="toolbar">
@@ -95,26 +142,83 @@
     <input id="search" placeholder="поиск пары, например SOL" />
   </div>
   <div class="chips" id="chips"></div>
-  <div class="note">Дистанция ордера — уровень, на котором заранее стоящий лимит чаще всего закрывался в плюс через HOLD_MS после исполнения. Глубина — насколько улетел прострел. В+ — доля сделок, которые через 0.3 с были бы прибыльными при закрытии в противоположную сторону.</div>
+  <div class="mt-wrap">
+    <section class="mt-box">
+      <div class="mt-head"><input type="checkbox" checked disabled /> Фильтр активных рынков</div>
+      <div class="mt-row">
+        <input type="checkbox" checked disabled />
+        <div class="mt-dd" id="f1">1ч Δ</div>
+        <div class="meta">абсолютная дельта за 1 час: (max−min) / open, как фильтр «1ч Δ» в MoonTrader</div>
+      </div>
+      <div class="mt-row">
+        <input type="checkbox" checked disabled />
+        <div class="mt-dd" id="f2">15м оΔ</div>
+        <div class="meta">открытая дельта 15м: (last−open)/open, как фильтр «15м оΔ» в MoonTrader</div>
+      </div>
+      <div class="mt-nums">
+        <div class="mt-num"><div class="lbl">Макс. кол. рынков</div><div class="val" id="fMax">25</div></div>
+        <div class="mt-num"><div class="lbl">Игнорировать первые</div><div class="val" id="fIgnore">2</div></div>
+        <div class="mt-num"><div class="lbl">Частота сортировки</div><div class="val" id="fSort">15 s</div></div>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Список как в MoonTrader</h2>
+        <span class="meta" id="boardMeta">сортировка: 1ч Δ ↓, затем |15м оΔ|</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Пара</th>
+            <th>Плечо</th>
+            <th>1ч Δ</th>
+            <th>15м оΔ</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="board"><tr><td class="empty" colspan="6">Ждём первую сортировку активных рынков</td></tr></tbody>
+      </table>
+    </section>
+  </div>
+  <div class="note">
+    Эти же поля поставьте в MoonTrader → Active markets / Фильтр активных рынков.
+    Сортировка по убыванию 1ч Δ, затем |15м оΔ|. Первые N выкидываются как шум, дальше берутся 25 пар.
+    Плечо — максимальное доступное на контракте OKX, в коридоре x20…x100. Один прострел = один импульс, без пачек.
+    Клик по событию в ленте или по строке пары открывает график прострела (свечи, линейка %, объём и USDT в свече).
+  </div>
   <div class="grid">
     <section class="panel">
       <table>
         <thead>
           <tr>
             <th>Пара</th>
+            <th>Плечо</th>
             <th>Прострелы</th>
             <th>Дистанция ордера</th>
             <th>Глубина p50 / p90</th>
-            <th>В+</th>
-            <th>PnL 0.3с</th>
             <th>Последний</th>
           </tr>
         </thead>
-        <tbody id="rows"><tr><td class="empty" colspan="7">Пока нет прострелов в выбранном окне</td></tr></tbody>
+        <tbody id="rows"><tr><td class="empty" colspan="6">Пока нет прострелов в выбранном окне</td></tr></tbody>
       </table>
     </section>
     <section class="panel feed" id="feed"></section>
   </div>
+  <div class="overlay" id="chartOverlay">
+    <div class="chart-box">
+      <div class="chart-head">
+        <div>
+          <h3 id="chartTitle">график прострела</h3>
+          <div class="meta" id="chartSub"></div>
+        </div>
+        <button class="chart-x" type="button" id="chartClose" aria-label="закрыть">×</button>
+      </div>
+      <div class="chart-canvas-wrap"><canvas id="chartCanvas"></canvas></div>
+      <div id="chartHint"></div>
+    </div>
+  </div>
+  <script src="/static/chart.js"></script>
   <script>
     const qs = new URLSearchParams(location.search);
     const token = qs.get("token");
@@ -137,6 +241,12 @@
 
     function fmt(n, d=2) { return Number(n).toFixed(d); }
     function dirClass(d) { return d === "UP" ? "up" : "down"; }
+    function lever(n) { return n ? ("x" + Math.round(Number(n))) : "—"; }
+    function signed(n) {
+      const v = Number(n);
+      const cls = v >= 0 ? "up" : "down";
+      return `<span class="${cls}">${v >= 0 ? "+" : ""}${fmt(v)}</span>`;
+    }
 
     async function tick() {
       const lookback = lookbackEl.value;
@@ -149,45 +259,75 @@
         api("/api/shots?" + q + "&limit=80"),
       ]);
       const f = stats.filters || {};
+      const board = stats.active_markets || [];
+      const activeN = board.filter(m => m.subscribed).length;
       document.getElementById("live").textContent =
         `${stats.symbols_watched || 0} в подписке · выход ${f.hold_ms || 300} мс`;
       document.getElementById("subtitle").textContent =
-        `${f.inst_type} ${f.quote} · ордер заранее, закрытие через ${f.hold_ms || 300} мс в противоположную сторону · KPI В+`;
+        `${f.inst_type} ${f.quote} · ордер заранее, закрытие через ${f.hold_ms || 300} мс · плечо x${f.min_leverage}–x${f.max_leverage}`;
       document.getElementById("kpiPairs").textContent = stats.pairs ?? 0;
       document.getElementById("kpiShots").textContent = stats.shots ?? 0;
-      document.getElementById("kpiVplus").textContent = `${fmt(stats.vplus_rate || 0, 1)}%`;
+      document.getElementById("kpiActive").textContent = activeN;
       document.getElementById("kpiWatch").textContent = stats.symbols_watched ?? 0;
+      document.getElementById("f1").textContent = f.active_filter_1h || "1ч Δ";
+      document.getElementById("f2").textContent = f.active_filter_15m || "15м оΔ";
+      document.getElementById("fMax").textContent = f.active_max_markets ?? 25;
+      document.getElementById("fIgnore").textContent = f.active_ignore_first ?? 2;
+      document.getElementById("fSort").textContent = (f.active_sort_sec ?? 15) + " s";
+      document.getElementById("boardMeta").textContent =
+        `пул ${stats.universe_size || 0} → skip ${f.active_ignore_first ?? 2} → ${activeN}`;
       document.getElementById("chips").innerHTML = [
         ["QAV", `${f.qav_24h_min}–${f.qav_24h_max}`],
+        ["Плечо", `x${f.min_leverage}–x${f.max_leverage}`],
+        ["1ч Δ", "вкл"],
+        ["15м оΔ", "вкл"],
+        ["Max рынков", f.active_max_markets],
+        ["Ignore first", f.active_ignore_first],
+        ["Sort", (f.active_sort_sec || 15) + " s"],
         ["Min %", f.shot_min_percent],
         ["Hold", (f.hold_ms || 300) + " мс"],
         ["Distance", (f.distance_levels || []).join(" / ")],
         ["BTC ±", `${f.btc_range_pct}% / ${f.btc_window_sec}с`],
-        ["Whitelist", (f.whitelist || []).length ? f.whitelist.length + " шт" : "все"],
       ].map(([k, v]) => `<span class="chip">${k}: <b>${v}</b></span>`).join("");
+
+      const boardBody = document.getElementById("board");
+      if (!board.length) {
+        boardBody.innerHTML = `<tr><td class="empty" colspan="6">Ждём первую сортировку активных рынков</td></tr>`;
+      } else {
+        boardBody.innerHTML = board.map(m => `
+          <tr class="${m.ignored ? "muted-row" : ""}">
+            <td>${m.rank}</td>
+            <td>${m.inst_id}</td>
+            <td class="amber">${lever(m.lever)}</td>
+            <td>${fmt(m.delta_1h)}</td>
+            <td>${signed(m.open_delta_15m)}</td>
+            <td class="${m.subscribed ? "tag on" : "tag"}">${m.ignored ? "игнор" : (m.subscribed ? "активен" : "")}</td>
+          </tr>`).join("");
+      }
 
       const needle = searchEl.value.trim().toLowerCase();
       const rows = (stats.rows || []).filter(r => !needle || r.symbol.toLowerCase().includes(needle));
       const body = document.getElementById("rows");
       if (!rows.length) {
-        body.innerHTML = `<tr><td class="empty" colspan="7">Нет прострелов по текущим фильтрам и времени</td></tr>`;
+        body.innerHTML = `<tr><td class="empty" colspan="6">Нет прострелов по текущим фильтрам и времени</td></tr>`;
       } else {
         body.innerHTML = rows.map(r => `
-          <tr>
+          <tr class="clickable" data-symbol="${r.symbol}" data-ts="${r.last_ts || 0}">
             <td>${r.symbol}</td>
+            <td class="amber">${lever(r.lever)}</td>
             <td>${r.count} <span class="down">${r.count_down}</span>/<span class="up">${r.count_up}</span></td>
             <td class="amber">${fmt(r.suggest_distance)}%</td>
             <td>${fmt(r.p50)} / ${fmt(r.p90)}</td>
-            <td class="${r.vplus_rate >= 50 ? "up" : "down"}">${fmt(r.vplus_rate, 0)}% <span class="meta">${r.vplus}/${r.count}</span></td>
-            <td class="${r.avg_pnl >= 0 ? "up" : "down"}">${r.avg_pnl >= 0 ? "+" : ""}${fmt(r.avg_pnl, 3)}%</td>
-            <td class="${dirClass(r.last_direction)}">${r.last_vplus ? "В+" : "В−"} ${r.last_direction} ${fmt(r.last_percent)} · ${r.last_time}</td>
+            <td class="${dirClass(r.last_direction)}">${r.last_direction} ${fmt(r.last_percent)} · ${r.last_time}</td>
           </tr>`).join("");
       }
       document.getElementById("feed").innerHTML = (shots.shots || []).map(s => `
-        <div class="feed-item">
+        <div class="feed-item" data-symbol="${s.symbol}" data-ts="${s.peak_ts || 0}" title="Открыть график прострела">
           <div class="meta">${s.time}</div>
-          <div>${s.symbol}<div class="meta">ордер ${fmt(s.suggest_distance)}% · глубина ${fmt(s.percent)}%</div></div>
-          <div class="${s.vplus ? "up" : "down"}">${s.vplus ? "В+" : "В−"} ${s.direction} ${s.pnl_pct >= 0 ? "+" : ""}${fmt(s.pnl_pct, 3)}%</div>
+          <div>${s.symbol} <span class="amber">${lever(s.lever)}</span>
+            <div class="meta">ордер ${fmt(s.suggest_distance)}% · глубина ${fmt(s.percent)}%</div>
+          </div>
+          <div class="${dirClass(s.direction)}">${s.direction} ${fmt(s.percent)}%</div>
         </div>`).join("") || `<div class="empty">Лента пустая</div>`;
     }
 
@@ -196,6 +336,23 @@
       directionEl.addEventListener(ev, () => tick().catch(console.error));
       btcCalmEl.addEventListener(ev, () => tick().catch(console.error));
       searchEl.addEventListener(ev, () => tick().catch(console.error));
+    });
+    document.getElementById("feed").addEventListener("click", (ev) => {
+      const item = ev.target.closest(".feed-item");
+      if (!item || !item.dataset.ts || typeof window.openShotChart !== "function") return;
+      window.openShotChart(api, item.dataset.symbol, item.dataset.ts);
+    });
+    document.getElementById("rows").addEventListener("click", (ev) => {
+      const row = ev.target.closest("tr[data-ts]");
+      if (!row || !row.dataset.ts || row.dataset.ts === "0") return;
+      window.openShotChart(api, row.dataset.symbol, row.dataset.ts);
+    });
+    document.getElementById("chartClose").addEventListener("click", () => window.closeShotChart());
+    document.getElementById("chartOverlay").addEventListener("click", (ev) => {
+      if (ev.target.id === "chartOverlay") window.closeShotChart();
+    });
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") window.closeShotChart();
     });
     tick().catch(err => { document.getElementById("live").textContent = "ошибка: " + err.message; });
     setInterval(() => tick().catch(console.error), 2500);

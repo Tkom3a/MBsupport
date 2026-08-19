@@ -8,6 +8,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 
+from .active_markets import ActiveMarket, rank_active_markets
 from .config import AppConfig, load_config
 from .detector import BtcDeltaTracker, SymbolDetector
 from .okx_rest import OkxRest, apply_market_filters
@@ -37,6 +38,9 @@ class ShotCore:
         )
         self.detectors: dict[str, SymbolDetector] = {}
         self.active_symbols: list[str] = []
+        self.active_board: list[ActiveMarket] = []
+        self.leverage: dict[str, float] = {}
+        self.universe_size: int = 0
         self.feed = OkxPublicFeed(
             cfg.exchange.ws_public,
             self._on_trade_sync,
@@ -58,6 +62,7 @@ class ShotCore:
                 cooldown_ms=self.cfg.shot.cooldown_ms,
                 recover_ratio=self.cfg.shot.recover_ratio,
                 hold_ms=self.cfg.shot.hold_ms,
+                refractory_ms=self.cfg.shot.refractory_ms,
                 distance_levels=self.cfg.shot.distance_levels,
                 vplus_min_pnl=self.cfg.shot.vplus_min_pnl,
             )
@@ -73,13 +78,15 @@ class ShotCore:
         for event in events:
             event.btc_delta_pct = btc_delta
             event.btc_calm = btc_calm
+            event.lever = self.leverage.get(event.symbol, 0.0)
             self.store.write(event)
             if (
                 self.cfg.notify.telegram_bot_token
                 and event.percent >= self.cfg.notify.telegram_min_percent
             ):
+                lever = f"x{event.lever:.0f}" if event.lever else ""
                 text = (
-                    f"{'В+' if event.vplus else 'В−'} {event.direction} {event.symbol} "
+                    f"{event.direction} {event.symbol} {lever} "
                     f"прострел {event.percent:.2f}%  ордер {event.suggest_distance:.2f}%  "
                     f"PnL {event.pnl_pct:+.3f}% / {event.hold_ms}мс"
                 )
@@ -93,17 +100,28 @@ class ShotCore:
         rest = OkxRest(self.cfg, self._session)
         instruments = await rest.fetch_universe()
         selected = apply_market_filters(instruments, self.cfg.market, self.cfg.filters)
-        symbols = [item.inst_id for item in selected]
+        self.universe_size = len(selected)
+        self.leverage = {item.inst_id: item.lever for item in instruments}
+        board = await rank_active_markets(rest, selected, self.cfg.active)
+        self.active_board = board
+        symbols = [item.inst_id for item in board if item.subscribed]
         btc = self.cfg.btc_filter.symbol
         if btc not in symbols:
             symbols.append(btc)
+            if btc not in self.leverage:
+                match = next((item for item in instruments if item.inst_id == btc), None)
+                if match:
+                    self.leverage[btc] = match.lever
         if symbols == self.active_symbols:
             return
         log.info(
-            "Universe refresh: %s symbols (QAV %.0f ... %.0f)",
+            "Universe refresh: pool %s → active %s (QAV %.0f…%.0f, lever x%.0f–x%.0f)",
             len(selected),
+            len(symbols),
             self.cfg.filters.qav_24h_min,
             self.cfg.filters.qav_24h_max,
+            self.cfg.filters.min_leverage,
+            self.cfg.filters.max_leverage,
         )
         self.active_symbols = symbols
         await self.feed.set_symbols(symbols)
@@ -130,7 +148,7 @@ class ShotCore:
             try:
                 await self.refresh_universe()
                 while True:
-                    await asyncio.sleep(self.cfg.market.refresh_sec)
+                    await asyncio.sleep(self.cfg.active.sort_sec)
                     try:
                         await self.refresh_universe()
                         if self.store.total:
