@@ -12,6 +12,6 @@ COPY shotcore ./shotcore
 COPY config.yaml .
 
 RUN mkdir -p /app/data /app/logs
-EXPOSE 8787
+EXPOSE 4861
 
 CMD ["python", "-m", "shotcore", "--config", "/app/config.yaml"]

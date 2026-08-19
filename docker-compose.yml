@@ -6,16 +6,16 @@ services:
     env_file:
       - .env
     ports:
-      - "${WEB_PORT:-8787}:8787"
+      - "${WEB_PORT:-4861}:4861"
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
     environment:
       TZ: ${TZ:-Europe/Moscow}
       WEB_HOST: 0.0.0.0
-      WEB_PORT: "8787"
+      WEB_PORT: "4861"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4861/health')"]
       interval: 20s
       timeout: 5s
       retries: 8

@@ -7,7 +7,7 @@
 1. по каким парам вообще были прострелы;
 2. на каком Distance ставить лимит, чтобы после удержания 0.3 с чаще выходить в плюс.
 
-- Дашборд: `http://IP:8787/`
+- Дашборд: `http://IP:4861/`
 - История: `data/shots.csv`
 - Сводка: `data/distance_hints.csv` (`suggest_distance`, `vplus_rate`)
 
@@ -46,7 +46,7 @@
 - Python 3.10+
 - доступ в интернет до `www.okx.com` и `ws.okx.com:8443`
 
-Открой входящий TCP-порт дашборда (по умолчанию **8787**) в фаерволе ВМ, если заходишь с другого компьютера.
+Открой входящий TCP-порт дашборда (по умолчанию **4861**) в фаерволе ВМ, если заходишь с другого компьютера.
 
 ---
 
@@ -64,13 +64,13 @@ docker compose ps
 docker compose logs -f --tail=50
 ```
 
-Страница: **http://IP-сервера:8787/**
+Страница: **http://IP-сервера:4861/**
 
 Проверка, что ядро живо:
 
 ```bash
-curl http://127.0.0.1:8787/health
-curl http://127.0.0.1:8787/api/status
+curl http://127.0.0.1:4861/health
+curl http://127.0.0.1:4861/api/status
 ```
 
 Остановка:
@@ -135,7 +135,7 @@ docker compose up -d --build --force-recreate
 ```bash
 docker compose ps
 docker compose logs --tail=80 shotcore
-curl -s http://127.0.0.1:8787/api/status
+curl -s http://127.0.0.1:4861/api/status
 ```
 
 Откат на предыдущий коммит, если что-то сломалось:
@@ -172,8 +172,8 @@ sudo systemctl restart shotcore    # если стоит unit
 
 | Переменная | Зачем |
 |---|---|
-| `WEB_HOST` / `WEB_PORT` | Адрес страницы. Снаружи удобно `0.0.0.0` и `8787` |
-| `WEB_TOKEN` | Если задать — вход только с `http://IP:8787/?token=СЕКРЕТ` |
+| `WEB_HOST` / `WEB_PORT` | Адрес страницы. Снаружи удобно `0.0.0.0` и `4861` |
+| `WEB_TOKEN` | Если задать — вход только с `http://IP:4861/?token=СЕКРЕТ` |
 | `TZ` | Часовой пояс ленты, например `Europe/Moscow` |
 | `STATS_LOOKBACK_MIN` | Окно статистики на странице, минуты. `0` = вся история |
 | `SHOT_WINDOWS_MS` | Окна детекции, мс, через запятую |
@@ -225,7 +225,7 @@ logs/shotcore.log           лог ядра
 ## 7. Типичные проблемы
 
 **Страница не открывается с другого ПК**  
-В `.env` должно быть `WEB_HOST=0.0.0.0`. Проверь фаервол: `sudo ufw allow 8787/tcp`.
+В `.env` должно быть `WEB_HOST=0.0.0.0`. Проверь фаервол: `sudo ufw allow 4861/tcp`.
 
 **Нет пар / 0 symbols**  
 Слишком жёсткий QAV или whitelist с опечаткой. Формат только `BTC-USDT-SWAP`, не `btcusdt`.
@@ -237,7 +237,7 @@ logs/shotcore.log           лог ядра
 Не забыли `--build`: без него Compose может поднять старый образ.
 
 **401 Need WEB_TOKEN**  
-Задан `WEB_TOKEN`. Открой `http://IP:8787/?token=значение_из_env`.
+Задан `WEB_TOKEN`. Открой `http://IP:4861/?token=значение_из_env`.
 
 ---
 

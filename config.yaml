@@ -52,6 +52,6 @@ output:
 
 web:
   host: 0.0.0.0
-  port: 8787
+  port: 4861
   timezone: Europe/Moscow
   stats_lookback_min: 1440

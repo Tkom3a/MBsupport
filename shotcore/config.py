@@ -58,7 +58,7 @@ class BtcFilterConfig:
 @dataclass
 class WebConfig:
     host: str = "0.0.0.0"
-    port: int = 8787
+    port: int = 4861
     token: str = ""
     timezone: str = "Europe/Moscow"
     stats_lookback_min: int = 1440
@@ -166,7 +166,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     web = _load_section(WebConfig, raw.get("web") or {})
     if not web.host and (raw.get("output") or {}).get("status_host"):
         web.host = str(raw["output"]["status_host"])
-    if web.port == 8787 and (raw.get("output") or {}).get("status_port"):
+    if web.port == 4861 and (raw.get("output") or {}).get("status_port"):
         web.port = int(raw["output"]["status_port"])
     notify = _load_section(NotifyConfig, raw.get("notify") or {})
 
