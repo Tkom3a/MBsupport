@@ -219,7 +219,7 @@ class SymbolDetector:
             distance_report=report,
             fill_ts=fill_ts,
             fill_price=fill_price,
-            path=self._path_after_fill(fill_ts, fill_price, last_price, ts),
+            path=self._path_after_fill(fill_ts, fill_price, last_price, fill_ts + self.hold_ms if fill_ts else ts),
         )
 
     def _simulate(

@@ -93,20 +93,35 @@
     return Number(shot.peak_ts) || (candles[0] && candles[0].ts) || 0;
   }
 
-  function pathPoints(shot, candles, fillTs, fillPx) {
+  function pathPoints(shot, candles, fillTs, fillPx, untilTs) {
     const raw = Array.isArray(shot.path) ? shot.path : [];
+    const end = untilTs || fillTs;
     const pts = raw
-      .filter((p) => p && p.length >= 2 && Number(p[0]) >= fillTs - 5 && Number(p[1]) > 0)
+      .filter((p) => p && p.length >= 2 && Number(p[0]) >= fillTs - 5 && Number(p[0]) <= end + 5 && Number(p[1]) > 0)
       .map((p) => [Number(p[0]), Number(p[1])]);
-    if (pts.length >= 2) return pts;
+    if (pts.length >= 2) {
+      if (pts[pts.length - 1][0] < end) {
+        pts.push([end, priceAtTs(candles, end, pts[pts.length - 1][1])]);
+      }
+      return pts;
+    }
     const out = fillTs && fillPx ? [[fillTs, fillPx]] : [];
     candles.forEach((c) => {
-      if (c.ts + 500 < fillTs) return;
-      out.push([c.ts, c.c]);
+      if (c.ts + 20 < fillTs || c.ts > end) return;
+      out.push([Math.min(c.ts, end), c.c]);
     });
-    const last = Number(shot.exit_price) || Number(shot.last_price) || 0;
-    if (last && out.length) out.push([out[out.length - 1][0], last]);
+    const lastPx = priceAtTs(candles, end, Number(shot.last_price) || fillPx);
+    if (lastPx && out.length) out.push([end, lastPx]);
     return out;
+  }
+
+  function priceAtTs(candles, ts, fallback) {
+    let chosen = fallback;
+    for (let i = 0; i < candles.length; i++) {
+      if (candles[i].ts <= ts) chosen = candles[i].c;
+      else return chosen;
+    }
+    return chosen;
   }
 
   function pill(ctx, text, x, y, bg, fg) {
@@ -133,30 +148,45 @@
   }
 
   function drawOrderOverlay(ctx, g) {
-    const { candles, shot, fillPx, exitPx, startPx, padL, padT, plotW, plotH, xAt, yAt, xAtTs } = g;
+    const { candles, shot, fillPx, startPx, padL, padT, plotW, yAt, xAtTs } = g;
     if (!fillPx || !startPx) return;
     const dist = Number(shot.suggest_distance) || 0;
+    const holdMs = Math.max(50, Number(shot.hold_ms) || 300);
     const fillTs = inferFillTs(candles, shot, fillPx);
+    const closeTs = fillTs + holdMs;
     const yFill = yAt(fillPx);
     const yStart = yAt(startPx);
+    const x0 = xAtTs(fillTs);
+    let x1 = xAtTs(closeTs);
+    if (x1 < x0 + 4) x1 = x0 + 4;
+    if (x1 > padL + plotW) x1 = padL + plotW;
 
     ctx.save();
-    ctx.setLineDash([6, 4]);
+    ctx.fillStyle = "rgba(215,161,59,0.20)";
+    const bandTop = Math.min(yStart, yFill);
+    ctx.fillRect(x0, bandTop, Math.max(4, x1 - x0), Math.max(2, Math.abs(yFill - yStart)));
     ctx.strokeStyle = AMBER;
-    ctx.lineWidth = 1.6;
+    ctx.lineWidth = 2.4;
+    ctx.lineCap = "round";
     ctx.beginPath();
-    ctx.moveTo(padL, yFill);
-    ctx.lineTo(padL + plotW, yFill);
+    ctx.moveTo(x0, yFill);
+    ctx.lineTo(x1, yFill);
     ctx.stroke();
-    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(x0, yFill - 5);
+    ctx.lineTo(x0, yFill + 5);
+    ctx.moveTo(x1, yFill - 5);
+    ctx.lineTo(x1, yFill + 5);
+    ctx.stroke();
     ctx.restore();
 
-    const label = `ордер ${fmt(dist, 2)}%  ${fmtPx(fillPx)}`;
+    const holdLabel = holdMs >= 1000 ? (holdMs / 1000) + "с" : holdMs + " мс";
+    const label = `ордер ${fmt(dist, 2)}% · ${holdLabel}`;
+    const labelX = Math.min(Math.max(padL + 4, x0), padL + plotW - 130);
     const labelY = yFill < padT + 18 ? yFill + 18 : yFill - 6;
-    pill(ctx, label, padL + 8, labelY, "#d7a13bcc", "#1a1408");
+    pill(ctx, label, labelX, labelY, "#d7a13bcc", "#1a1408");
 
-    const xfMark = xAtTs(fillTs);
-    const xf = Math.max(padL + 16, xfMark - 18);
+    const xf = Math.max(padL + 16, x0 - 18);
     ctx.strokeStyle = AMBER;
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -172,19 +202,18 @@
     ctx.fillStyle = AMBER;
     ctx.font = "bold 12px Segoe UI, sans-serif";
     ctx.textAlign = "right";
-    const distY = (yStart + yFill) / 2;
-    ctx.fillText(fmt(dist, 2) + "%", xf - 8, distY + 4);
+    ctx.fillText(fmt(dist, 2) + "%", xf - 8, (yStart + yFill) / 2 + 4);
 
     ctx.beginPath();
     ctx.fillStyle = AMBER;
-    ctx.arc(xfMark, yFill, 4.5, 0, Math.PI * 2);
+    ctx.arc(x0, yFill, 4.5, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = TEXT;
     ctx.font = "bold 10px Segoe UI, sans-serif";
     ctx.textAlign = "left";
-    ctx.fillText("вход", xfMark + 8, yFill + 4);
+    ctx.fillText("вход", x0 + 8, yFill + (yFill < padT + 28 ? 14 : -8));
 
-    const pts = pathPoints(shot, candles, fillTs, fillPx);
+    const pts = pathPoints(shot, candles, fillTs, fillPx, closeTs);
     if (pts.length >= 2) {
       ctx.beginPath();
       ctx.strokeStyle = PATH;
@@ -192,22 +221,25 @@
       ctx.lineJoin = "round";
       ctx.lineCap = "round";
       pts.forEach((pt, i) => {
-        const x = xAtTs(pt[0]);
+        const x = Math.min(xAtTs(pt[0]), x1);
         const y = yAt(pt[1]);
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       });
       ctx.stroke();
-      const last = pts[pts.length - 1];
-      const xLast = xAtTs(last[0]);
-      const yLast = yAt(exitPx || last[1]);
+      const closePx = priceAtTs(candles, closeTs, pts[pts.length - 1][1]);
       ctx.beginPath();
       ctx.fillStyle = UP;
-      ctx.arc(xLast, yLast, 4.5, 0, Math.PI * 2);
+      ctx.arc(x1, yAt(closePx), 4.5, 0, Math.PI * 2);
       ctx.fill();
-      const tp = Number(shot.pnl_pct);
-      const tpText = Number.isFinite(tp) ? `TP ${tp >= 0 ? "+" : ""}${fmt(tp, 2)}%` : "выход";
-      pill(ctx, tpText, Math.min(xLast + 8, padL + plotW - 70), yLast < padT + 18 ? yLast + 16 : yLast - 6, "#4fba7acc", "#07140c");
+      pill(
+        ctx,
+        "выход " + holdLabel,
+        Math.min(x1 + 8, padL + plotW - 78),
+        yAt(closePx) < padT + 18 ? yAt(closePx) + 16 : yAt(closePx) - 6,
+        "#4fba7acc",
+        "#07140c"
+      );
     }
   }
 
@@ -253,7 +285,7 @@
       return;
     }
     $("chartHint").textContent =
-      "Янтарная линия — дистанция виртуального ордера. Голубая — движение цены после входа. Наведите на свечу: объём и USDT.";
+      "Янтарная линия — виртуальный ордер на 0.3 с после входа. Голубая — цена за это же время. Наведите на свечу: объём и USDT.";
 
     const wrap = canvas.parentElement;
     const cssW = Math.max(640, wrap.clientWidth);
