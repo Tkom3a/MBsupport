@@ -19,6 +19,9 @@ def build_app(core: ShotCore) -> web.Application:
     app["core"] = core
     app.router.add_get("/", _index)
     app.router.add_get("/health", _health)
+    app.router.add_get("/favicon.ico", _favicon_ico)
+    app.router.add_get("/favicon.png", _favicon_png)
+    app.router.add_get("/apple-touch-icon.png", _apple_icon)
     app.router.add_get("/api/status", _status)
     app.router.add_get("/api/stats", _stats)
     app.router.add_get("/api/shots", _shots)
@@ -38,7 +41,7 @@ def _auth_middleware(core: ShotCore):
             or request.cookies.get("shot_token")
             or ""
         )
-        if request.path in {"/health"}:
+        if request.path in {"/health", "/favicon.ico", "/favicon.png", "/apple-touch-icon.png"}:
             return await handler(request)
         if given != token:
             return web.Response(status=401, text="Need WEB_TOKEN")
@@ -52,6 +55,18 @@ def _auth_middleware(core: ShotCore):
 
 async def _health(_request: web.Request) -> web.Response:
     return web.Response(text="ok")
+
+
+async def _favicon_ico(_request: web.Request) -> web.FileResponse:
+    return web.FileResponse(WEB_DIR / "favicon.ico")
+
+
+async def _favicon_png(_request: web.Request) -> web.FileResponse:
+    return web.FileResponse(WEB_DIR / "favicon.png")
+
+
+async def _apple_icon(_request: web.Request) -> web.FileResponse:
+    return web.FileResponse(WEB_DIR / "apple-touch-icon.png")
 
 
 async def _index(_request: web.Request) -> web.FileResponse:
