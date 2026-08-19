@@ -28,6 +28,7 @@ class ShotCore:
             jsonl_name=cfg.output.jsonl_name,
             hints_name=cfg.output.hints_name,
             tz_name=cfg.web.timezone,
+            distance_levels=cfg.shot.distance_levels,
         )
         self.btc = BtcDeltaTracker(
             cfg.btc_filter.symbol,
@@ -56,6 +57,9 @@ class ShotCore:
                 min_quote_volume=self.cfg.shot.min_quote_volume,
                 cooldown_ms=self.cfg.shot.cooldown_ms,
                 recover_ratio=self.cfg.shot.recover_ratio,
+                hold_ms=self.cfg.shot.hold_ms,
+                distance_levels=self.cfg.shot.distance_levels,
+                vplus_min_pnl=self.cfg.shot.vplus_min_pnl,
             )
             self.detectors[symbol] = det
         return det
@@ -74,7 +78,11 @@ class ShotCore:
                 self.cfg.notify.telegram_bot_token
                 and event.percent >= self.cfg.notify.telegram_min_percent
             ):
-                text = f"{event.direction} {event.symbol} {event.percent:.2f}%  window={event.window_ms}ms"
+                text = (
+                    f"{'В+' if event.vplus else 'В−'} {event.direction} {event.symbol} "
+                    f"прострел {event.percent:.2f}%  ордер {event.suggest_distance:.2f}%  "
+                    f"PnL {event.pnl_pct:+.3f}% / {event.hold_ms}мс"
+                )
                 try:
                     self._tg_queue.put_nowait(text)
                 except asyncio.QueueFull:

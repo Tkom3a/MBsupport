@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
-from typing import Deque
+from dataclasses import dataclass, field
+from typing import Any, Deque
 
 
 @dataclass
@@ -32,6 +32,13 @@ class ShotEvent:
     pct_300: float = 0.0
     pct_1000: float = 0.0
     pct_3000: float = 0.0
+    hold_ms: int = 300
+    exit_price: float = 0.0
+    rollback_pct: float = 0.0
+    vplus: bool = False
+    pnl_pct: float = 0.0
+    suggest_distance: float = 0.0
+    distance_report: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -45,6 +52,7 @@ class _OpenShot:
     peak_pct: float
     trades: int
     quote_volume: float
+    peaked: bool = False
 
 
 class SymbolDetector:
@@ -57,6 +65,9 @@ class SymbolDetector:
         min_quote_volume: float,
         cooldown_ms: int,
         recover_ratio: float,
+        hold_ms: int = 300,
+        distance_levels: list[float] | None = None,
+        vplus_min_pnl: float = 0.0,
     ):
         self.symbol = symbol
         self.windows_ms = sorted(windows_ms)
@@ -65,9 +76,12 @@ class SymbolDetector:
         self.min_quote_volume = min_quote_volume
         self.cooldown_ms = cooldown_ms
         self.recover_ratio = recover_ratio
+        self.hold_ms = hold_ms
+        self.distance_levels = distance_levels or [1.11, 1.32, 1.42, 1.63, 1.78]
+        self.vplus_min_pnl = vplus_min_pnl
         self.trades: Deque[Trade] = deque()
         self._open: dict[str, _OpenShot] = {}
-        self.max_keep_ms = max(self.windows_ms) + cooldown_ms + 1000
+        self.max_keep_ms = max(self.windows_ms) + cooldown_ms + hold_ms + 1500
 
     def on_trade(self, ts: int, price: float, qty: float, side: str) -> list[ShotEvent]:
         if price <= 0:
@@ -90,7 +104,6 @@ class SymbolDetector:
                 if prev is None or pct > prev[1]:
                     best[direction] = (window_ms, pct, ref, extreme, count, qvol)
 
-        closed: list[ShotEvent] = []
         for direction, (window_ms, pct, ref, extreme, count, qvol) in best.items():
             opened = self._open.get(direction)
             if opened is None:
@@ -107,7 +120,6 @@ class SymbolDetector:
                         quote_volume=qvol,
                     )
                 continue
-
             if pct > opened.peak_pct:
                 opened.peak_pct = pct
                 opened.window_ms = window_ms
@@ -116,6 +128,7 @@ class SymbolDetector:
                 opened.peak_ts = ts
                 opened.trades = count
                 opened.quote_volume = qvol
+                opened.peaked = False
 
             if direction == "DOWN":
                 recover_price = opened.extreme_price * (1.0 + opened.peak_pct / 100.0 * self.recover_ratio)
@@ -123,16 +136,15 @@ class SymbolDetector:
             else:
                 recover_price = opened.extreme_price * (1.0 - opened.peak_pct / 100.0 * self.recover_ratio)
                 recovered = price <= recover_price
-
             if recovered or ts - opened.peak_ts >= self.cooldown_ms:
-                closed.append(self._finish(opened, ts, price, metrics))
-                del self._open[direction]
+                opened.peaked = True
 
+        closed: list[ShotEvent] = []
         for direction in list(self._open):
-            if direction in best:
-                continue
             opened = self._open[direction]
-            if ts - opened.peak_ts >= self.cooldown_ms:
+            ready = opened.peaked or ts - opened.peak_ts >= self.cooldown_ms
+            waited = ts - opened.peak_ts >= self.hold_ms
+            if ready and waited:
                 closed.append(self._finish(opened, ts, price, metrics))
                 del self._open[direction]
         return closed
@@ -152,6 +164,7 @@ class SymbolDetector:
                 extras[window_ms] = (ref - low) / ref * 100.0
             else:
                 extras[window_ms] = (high - ref) / ref * 100.0
+        report, suggest, pnl, vplus, exit_price, rollback = self._simulate(opened, last_price)
         return ShotEvent(
             symbol=self.symbol,
             direction=opened.direction,
@@ -170,7 +183,93 @@ class SymbolDetector:
             pct_300=round(extras.get(300, 0.0), 4),
             pct_1000=round(extras.get(1000, 0.0), 4),
             pct_3000=round(extras.get(3000, 0.0), 4),
+            hold_ms=self.hold_ms,
+            exit_price=exit_price,
+            rollback_pct=round(rollback, 4),
+            vplus=vplus,
+            pnl_pct=round(pnl, 4),
+            suggest_distance=suggest,
+            distance_report=report,
         )
+
+    def _simulate(
+        self, opened: _OpenShot, last_price: float
+    ) -> tuple[list[dict[str, Any]], float, float, bool, float, float]:
+        exit_after_peak = self._price_at(opened.peak_ts + self.hold_ms, last_price)
+        if opened.direction == "DOWN" and opened.start_price:
+            rollback = (exit_after_peak - opened.extreme_price) / opened.start_price * 100.0
+        elif opened.start_price:
+            rollback = (opened.extreme_price - exit_after_peak) / opened.start_price * 100.0
+        else:
+            rollback = 0.0
+
+        levels = sorted({round(x, 4) for x in self.distance_levels if x > 0})
+        report: list[dict[str, Any]] = []
+        chosen_pnl = 0.0
+        chosen_vplus = False
+        suggest = 0.0
+        for distance in levels:
+            row = self._simulate_distance(opened, distance, last_price)
+            report.append(row)
+            if row["filled"] and row["vplus"] and distance >= suggest:
+                suggest = distance
+                chosen_pnl = row["pnl_pct"]
+                chosen_vplus = True
+        if suggest == 0.0:
+            filled = [row for row in report if row["filled"]]
+            if filled:
+                best = max(filled, key=lambda item: item["pnl_pct"])
+                suggest = best["distance"]
+                chosen_pnl = best["pnl_pct"]
+                chosen_vplus = best["vplus"]
+            else:
+                suggest = round(opened.peak_pct * 0.85, 2)
+                chosen_pnl = rollback
+                chosen_vplus = rollback > self.vplus_min_pnl
+        return report, round(suggest, 2), chosen_pnl, chosen_vplus, exit_after_peak, rollback
+
+    def _simulate_distance(self, opened: _OpenShot, distance: float, last_price: float) -> dict[str, Any]:
+        if opened.peak_pct + 1e-9 < distance or opened.start_price <= 0:
+            return {"distance": distance, "filled": False, "vplus": False, "pnl_pct": 0.0}
+        if opened.direction == "DOWN":
+            fill_px = opened.start_price * (1.0 - distance / 100.0)
+        else:
+            fill_px = opened.start_price * (1.0 + distance / 100.0)
+        fill_ts = self._first_cross(opened.start_ts, opened.direction, fill_px)
+        if fill_ts is None:
+            return {"distance": distance, "filled": False, "vplus": False, "pnl_pct": 0.0}
+        exit_px = self._price_at(fill_ts + self.hold_ms, last_price)
+        if fill_px <= 0 or exit_px <= 0:
+            return {"distance": distance, "filled": True, "vplus": False, "pnl_pct": 0.0}
+        if opened.direction == "DOWN":
+            pnl = (exit_px - fill_px) / fill_px * 100.0
+        else:
+            pnl = (fill_px - exit_px) / fill_px * 100.0
+        return {
+            "distance": distance,
+            "filled": True,
+            "vplus": pnl > self.vplus_min_pnl,
+            "pnl_pct": round(pnl, 4),
+        }
+
+    def _first_cross(self, start_ts: int, direction: str, fill_px: float) -> int | None:
+        for trade in self.trades:
+            if trade.ts < start_ts:
+                continue
+            if direction == "DOWN" and trade.price <= fill_px:
+                return trade.ts
+            if direction == "UP" and trade.price >= fill_px:
+                return trade.ts
+        return None
+
+    def _price_at(self, ts: int, fallback: float) -> float:
+        chosen = fallback
+        for trade in self.trades:
+            if trade.ts <= ts:
+                chosen = trade.price
+            elif trade.ts > ts:
+                return chosen if chosen else trade.price
+        return chosen or fallback
 
     def _window_metrics(self, ts: int, current: float) -> dict[int, tuple[float, float, float, int, float]]:
         out: dict[int, tuple[float, float, float, int, float]] = {}

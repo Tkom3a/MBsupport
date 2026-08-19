@@ -33,6 +33,9 @@ shot:
   min_quote_volume: 200
   cooldown_ms: 2500
   recover_ratio: 0.35
+  hold_ms: 300
+  distance_levels: [1.11, 1.32, 1.42, 1.63, 1.78]
+  vplus_min_pnl: 0.0
 
 # Как deltaFilterList в MT: BTC-USDT-SWAP, 60с, ±0.6%.
 # Ядро пишет ВСЕ прострелы, поле btc_calm показывает, прошёл бы фильтр MT.

@@ -32,20 +32,33 @@ CSV_FIELDS = [
     "pct_300",
     "pct_1000",
     "pct_3000",
-    "would_fill_1_11",
-    "would_fill_1_32",
-    "would_fill_1_63",
+    "hold_ms",
+    "exit_price",
+    "rollback_pct",
+    "vplus",
+    "pnl_pct",
+    "suggest_distance",
+    "distance_report",
 ]
 
 
 class ShotStore:
-    def __init__(self, directory: Path, csv_name: str, jsonl_name: str, hints_name: str, tz_name: str = "UTC"):
+    def __init__(
+        self,
+        directory: Path,
+        csv_name: str,
+        jsonl_name: str,
+        hints_name: str,
+        tz_name: str = "UTC",
+        distance_levels: list[float] | None = None,
+    ):
         self.directory = directory
         self.directory.mkdir(parents=True, exist_ok=True)
         self.csv_path = self.directory / csv_name
         self.jsonl_path = self.directory / jsonl_name
         self.hints_path = self.directory / hints_name
         self.tz = _zone(tz_name)
+        self.distance_levels = distance_levels or [1.11, 1.32, 1.42, 1.63, 1.78]
         self.events: deque[dict[str, Any]] = deque(maxlen=50_000)
         self.total = 0
         self._ensure_csv()
@@ -53,7 +66,13 @@ class ShotStore:
 
     def _ensure_csv(self) -> None:
         if self.csv_path.exists():
-            return
+            with self.csv_path.open(encoding="utf-8", errors="replace") as fh:
+                first = fh.readline()
+            if first and "vplus" in first and "suggest_distance" in first:
+                return
+            backup = self.csv_path.with_suffix(".csv.bak")
+            self.csv_path.replace(backup)
+            log.info("Rotated old shots.csv -> %s", backup.name)
         with self.csv_path.open("w", newline="", encoding="utf-8") as fh:
             csv.DictWriter(fh, fieldnames=CSV_FIELDS).writeheader()
 
@@ -106,9 +125,13 @@ class ShotStore:
             "pct_300": event.pct_300,
             "pct_1000": event.pct_1000,
             "pct_3000": event.pct_3000,
-            "would_fill_1_11": int(event.percent >= 1.11),
-            "would_fill_1_32": int(event.percent >= 1.32),
-            "would_fill_1_63": int(event.percent >= 1.63),
+            "hold_ms": event.hold_ms,
+            "exit_price": event.exit_price,
+            "rollback_pct": event.rollback_pct,
+            "vplus": int(event.vplus),
+            "pnl_pct": event.pnl_pct,
+            "suggest_distance": event.suggest_distance,
+            "distance_report": json.dumps(event.distance_report, ensure_ascii=False),
         }
         stored = _row_to_event(row)
         if stored:
@@ -116,16 +139,18 @@ class ShotStore:
         with self.csv_path.open("a", newline="", encoding="utf-8") as fh:
             csv.DictWriter(fh, fieldnames=CSV_FIELDS).writerow(row)
         with self.jsonl_path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps({**row, "btc_calm": bool(event.btc_calm)}, ensure_ascii=False) + "\n")
+            fh.write(json.dumps({**row, "btc_calm": bool(event.btc_calm), "vplus": bool(event.vplus)}, ensure_ascii=False) + "\n")
         self.total += 1
+        mark = "В+" if event.vplus else "В−"
         log.info(
-            "SHOT %s %s %.2f%% window=%sms btc_delta=%.2f calm=%s",
+            "SHOT %s %s %.2f%% dist=%.2f %s pnl=%.3f%% hold=%sms",
             event.direction,
             event.symbol,
             event.percent,
-            event.window_ms,
-            event.btc_delta_pct,
-            event.btc_calm,
+            event.suggest_distance,
+            mark,
+            event.pnl_pct,
+            event.hold_ms,
         )
         return stored or row
 
@@ -146,8 +171,11 @@ class ShotStore:
             percents = [float(x["percent"]) for x in shots]
             downs = [float(x["percent"]) for x in shots if x["direction"] == "DOWN"]
             ups = [float(x["percent"]) for x in shots if x["direction"] == "UP"]
+            pnls = [float(x["pnl_pct"]) for x in shots]
+            vplus_n = sum(1 for x in shots if x["vplus"])
             last = shots[-1]
             ordered = sorted(percents)
+            suggest, level_stats = _best_distance(shots, self.distance_levels)
             rows.append(
                 {
                     "symbol": symbol,
@@ -162,20 +190,29 @@ class ShotStore:
                     "p80": round(_percentile(ordered, 80), 4),
                     "p90": round(_percentile(ordered, 90), 4),
                     "max": round(ordered[-1], 4),
-                    "suggest_distance": round(_percentile(ordered, 70), 2),
+                    "suggest_distance": suggest,
+                    "vplus": vplus_n,
+                    "vplus_rate": round(100.0 * vplus_n / len(shots), 1),
+                    "avg_pnl": round(statistics.fmean(pnls), 4) if pnls else 0.0,
+                    "levels": level_stats,
                     "last_percent": round(float(last["percent"]), 4),
                     "last_direction": last["direction"],
+                    "last_vplus": bool(last["vplus"]),
                     "last_time": _fmt_local(last["peak_ts"], self.tz),
                     "last_ts": last["peak_ts"],
                 }
             )
-        rows.sort(key=lambda row: (row["avg"], row["count"]), reverse=True)
+        rows.sort(key=lambda row: (row["vplus_rate"], row["count"], row["avg"]), reverse=True)
         all_pct = [float(x["percent"]) for x in items]
+        vplus_n = sum(1 for x in items if x["vplus"])
         return {
             "lookback_min": lookback_min,
             "shots": len(items),
             "pairs": len(rows),
             "avg": round(statistics.fmean(all_pct), 4) if all_pct else 0.0,
+            "vplus": vplus_n,
+            "vplus_rate": round(100.0 * vplus_n / len(items), 1) if items else 0.0,
+            "hold_ms": items[-1]["hold_ms"] if items else 300,
             "rows": rows,
         }
 
@@ -187,15 +224,14 @@ class ShotStore:
                 fieldnames=[
                     "symbol",
                     "count",
+                    "suggest_distance",
+                    "vplus_rate",
+                    "avg_pnl",
                     "avg",
-                    "avg_down",
-                    "avg_up",
                     "p50",
                     "p70",
-                    "p80",
                     "p90",
                     "max",
-                    "suggest_distance",
                 ],
             )
             writer.writeheader()
@@ -219,6 +255,40 @@ class ShotStore:
         return out
 
 
+def _best_distance(shots: list[dict[str, Any]], levels: list[float]) -> tuple[float, list[dict[str, Any]]]:
+    stats: list[dict[str, Any]] = []
+    for distance in levels:
+        filled = 0
+        vplus = 0
+        pnls: list[float] = []
+        for shot in shots:
+            for row in shot.get("distance_report") or []:
+                if abs(float(row.get("distance") or 0) - distance) > 1e-6:
+                    continue
+                if row.get("filled"):
+                    filled += 1
+                    pnls.append(float(row.get("pnl_pct") or 0))
+                    if row.get("vplus"):
+                        vplus += 1
+                break
+        rate = 100.0 * vplus / filled if filled else 0.0
+        stats.append(
+            {
+                "distance": distance,
+                "filled": filled,
+                "vplus": vplus,
+                "vplus_rate": round(rate, 1),
+                "avg_pnl": round(statistics.fmean(pnls), 4) if pnls else 0.0,
+            }
+        )
+    ranked = [row for row in stats if row["filled"] > 0]
+    if ranked:
+        best = max(ranked, key=lambda row: (row["vplus_rate"], row["avg_pnl"], row["distance"]))
+        return best["distance"], stats
+    percents = sorted(float(x["percent"]) for x in shots)
+    return round(_percentile(percents, 50) * 0.85, 2), stats
+
+
 def _zone(name: str) -> ZoneInfo:
     try:
         return ZoneInfo(name)
@@ -238,7 +308,10 @@ def _public_event(item: dict[str, Any], tz: ZoneInfo) -> dict[str, Any]:
         "percent": item["percent"],
         "window_ms": item["window_ms"],
         "btc_calm": item["btc_calm"],
-        "suggest_distance": round(_percentile([item["percent"]], 70), 2),
+        "vplus": item["vplus"],
+        "pnl_pct": item["pnl_pct"],
+        "suggest_distance": item["suggest_distance"],
+        "rollback_pct": item["rollback_pct"],
     }
 
 
@@ -250,19 +323,37 @@ def _row_to_event(row: dict[str, Any]) -> dict[str, Any] | None:
             return None
         raw_time = str(row.get("time") or "")
         peak_ts = _parse_ts(raw_time)
-        calm = row.get("btc_calm")
-        if isinstance(calm, str):
-            calm = calm.strip() in {"1", "true", "True"}
+        calm = _as_bool(row.get("btc_calm"))
+        report = row.get("distance_report") or []
+        if isinstance(report, str) and report:
+            try:
+                report = json.loads(report)
+            except json.JSONDecodeError:
+                report = []
+        if not isinstance(report, list):
+            report = []
         return {
             "peak_ts": peak_ts,
             "symbol": symbol,
             "direction": str(row.get("direction") or "").upper(),
             "percent": percent,
             "window_ms": int(float(row.get("window_ms") or 0)),
-            "btc_calm": bool(calm),
+            "btc_calm": calm,
+            "hold_ms": int(float(row.get("hold_ms") or 300)),
+            "vplus": _as_bool(row.get("vplus")),
+            "pnl_pct": float(row.get("pnl_pct") or 0),
+            "suggest_distance": float(row.get("suggest_distance") or 0),
+            "rollback_pct": float(row.get("rollback_pct") or 0),
+            "distance_report": report,
         }
     except (TypeError, ValueError):
         return None
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip() in {"1", "true", "True"}
+    return bool(value)
 
 
 def _parse_ts(value: str) -> int:

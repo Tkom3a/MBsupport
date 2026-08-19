@@ -43,6 +43,9 @@ class ShotConfig:
     min_quote_volume: float = 200
     cooldown_ms: int = 2500
     recover_ratio: float = 0.35
+    hold_ms: int = 300
+    distance_levels: list[float] = field(default_factory=lambda: [1.11, 1.32, 1.42, 1.63, 1.78])
+    vplus_min_pnl: float = 0.0
 
 
 @dataclass
@@ -129,6 +132,13 @@ def _as_ints(name: str, default: list[int]) -> list[int]:
     return [int(float(part)) for part in parts]
 
 
+def _as_floats(name: str, default: list[float]) -> list[float]:
+    parts = _as_csv(name)
+    if not parts:
+        return default
+    return [float(part) for part in parts]
+
+
 def load_dotenv_files(root: Path) -> None:
     for candidate in (root / ".env", Path.cwd() / ".env"):
         if candidate.exists():
@@ -199,6 +209,12 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         shot.cooldown_ms = _as_int("SHOT_COOLDOWN_MS", shot.cooldown_ms)
     if _env_filled("SHOT_RECOVER_RATIO"):
         shot.recover_ratio = _as_float("SHOT_RECOVER_RATIO", shot.recover_ratio)
+    if _env_filled("HOLD_MS"):
+        shot.hold_ms = _as_int("HOLD_MS", shot.hold_ms)
+    if _env_filled("DISTANCE_LEVELS"):
+        shot.distance_levels = _as_floats("DISTANCE_LEVELS", shot.distance_levels)
+    if _env_filled("VPLUS_MIN_PNL"):
+        shot.vplus_min_pnl = _as_float("VPLUS_MIN_PNL", shot.vplus_min_pnl)
 
     if _env_filled("BTC_SYMBOL"):
         btc_filter.symbol = norm_symbol(_env("BTC_SYMBOL"))
@@ -251,6 +267,9 @@ def public_filters(cfg: AppConfig) -> dict[str, Any]:
         "blacklist": cfg.market.blacklist,
         "shot_windows_ms": cfg.shot.windows_ms,
         "shot_min_percent": cfg.shot.min_percent,
+        "hold_ms": cfg.shot.hold_ms,
+        "distance_levels": cfg.shot.distance_levels,
+        "vplus_min_pnl": cfg.shot.vplus_min_pnl,
         "btc_window_sec": cfg.btc_filter.window_sec,
         "btc_range_pct": cfg.btc_filter.range_pct,
         "timezone": cfg.web.timezone,
