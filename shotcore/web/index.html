@@ -117,13 +117,13 @@
   <header>
     <div>
       <h1>Shot<span>Core</span> — разведка дистанций</h1>
-      <div class="meta" id="subtitle">Только прострелы с откатом: ордер закрылся бы в плюс при TP 0.3%</div>
+      <div class="meta" id="subtitle">Тики 0.5–0.7 с как в MoonTrader · рекомендация дистанции и счет +/-</div>
     </div>
     <div class="live"><span class="dot"></span><span id="live">ожидание данных</span></div>
   </header>
   <div class="kpis">
     <div class="kpi"><div class="lbl">Пары с прострелами</div><div class="val" id="kpiPairs">—</div></div>
-    <div class="kpi"><div class="lbl">Прострелов с TP</div><div class="val" id="kpiShots">—</div></div>
+    <div class="kpi"><div class="lbl">Прострелов</div><div class="val" id="kpiShots">—</div></div>
     <div class="kpi"><div class="lbl">Активных рынков</div><div class="val" id="kpiActive">—</div></div>
     <div class="kpi"><div class="lbl">Следим пар</div><div class="val" id="kpiWatch">—</div></div>
   </div>
@@ -152,18 +152,20 @@
             <th>Пара</th>
             <th>Плечо</th>
             <th>Прострелы</th>
-            <th>Дистанция ордера</th>
+            <th>Рекомендация</th>
+            <th>Счет+%</th>
+            <th>Вер.</th>
             <th>Глубина p50 / p90</th>
             <th>Последний</th>
           </tr>
         </thead>
-        <tbody id="rows"><tr><td class="empty" colspan="6">Пока нет прострелов в выбранном окне</td></tr></tbody>
+        <tbody id="rows"><tr><td class="empty" colspan="8">Пока нет прострелов в выбранном окне</td></tr></tbody>
       </table>
     </section>
     <section class="panel feed" id="feed"></section>
   </div>
   <div class="note">
-    Клик по событию в ленте или по строке пары открывает график: янтарная линия ордера живёт 0.3 с после входа, голубая — цена за это же время. В списке только импульсы с обратным ходом ≥ TP, на которых лимит закрылся бы в плюс.
+    Клик по событию открывает отчёт тиками как в MoonTrader (рамка измерения, ордер 0.3 с). Колонка «Счет+%» — плюс/минус виртуальных сделок на рекомендованной дистанции.
   </div>
   <div class="mt-wrap">
     <section class="mt-box">
@@ -312,9 +314,9 @@
       const board = stats.active_markets || [];
       const activeN = board.filter(m => m.subscribed).length;
       document.getElementById("live").textContent =
-        `${stats.symbols_watched || 0} в подписке · TP ${f.tp_min_pct ?? 0.3}%`;
+        `${stats.symbols_watched || 0} в подписке · тик ${((f.shot_windows_ms || [500,700])[0] || 500)} мс`;
       document.getElementById("subtitle").textContent =
-        `${f.inst_type} ${f.quote} · только откат ≥ TP ${f.tp_min_pct ?? 0.3}% · плечо x${f.min_leverage}–x${f.max_leverage}`;
+        `${f.inst_type} ${f.quote} · измерение 0.5–0.7 с / 1–2 тика · рекомендация −${f.suggest_inside_pct ?? 0.05}% внутрь прострела`;
       document.getElementById("kpiPairs").textContent = stats.pairs ?? 0;
       document.getElementById("kpiShots").textContent = stats.shots ?? 0;
       document.getElementById("kpiActive").textContent = activeN;
@@ -332,7 +334,7 @@
         ["Max рынков", f.active_max_markets],
         ["Ignore first", f.active_ignore_first],
         ["Sort", (f.active_sort_sec || 15) + " s"],
-        ["Min %", f.shot_min_percent],
+        ["Тик", ((f.shot_windows_ms || [500, 700, 1200]).join("/") ) + " мс"],
         ["TP", (f.tp_min_pct ?? 0.3) + "%"],
         ["Hold", (f.hold_ms || 300) + " мс"],
         ["Distance", (f.distance_levels || []).join(" / ")],
@@ -350,7 +352,7 @@
       const rows = (stats.rows || []).filter(r => !needle || r.symbol.toLowerCase().includes(needle));
       const body = document.getElementById("rows");
       if (!rows.length) {
-        body.innerHTML = `<tr><td class="empty" colspan="6">Нет прострелов с откатом TP ${f.tp_min_pct ?? 0.3}% в выбранном окне</td></tr>`;
+        body.innerHTML = `<tr><td class="empty" colspan="8">Нет прострелов в выбранном окне</td></tr>`;
       } else {
         body.innerHTML = rows.map(r => `
           <tr class="clickable" data-symbol="${r.symbol}" data-ts="${r.last_ts || 0}">
@@ -358,6 +360,8 @@
             <td class="amber">${lever(r.lever)}</td>
             <td>${r.count} <span class="down">${r.count_down}</span>/<span class="up">${r.count_up}</span></td>
             <td class="amber">${fmt(r.suggest_distance)}%</td>
+            <td class="amber">${r.score_text || "0/0"}</td>
+            <td>${fmt(r.win_prob || 0, 0)}%</td>
             <td>${fmt(r.p50)} / ${fmt(r.p90)}</td>
             <td class="${dirClass(r.last_direction)}">${r.last_direction} ${fmt(r.last_percent)} · ${r.last_time}</td>
           </tr>`).join("");
@@ -366,10 +370,10 @@
         <div class="feed-item" data-symbol="${s.symbol}" data-ts="${s.peak_ts || 0}" title="Открыть график прострела">
           <div class="meta">${s.time}</div>
           <div>${s.symbol} <span class="amber">${lever(s.lever)}</span>
-            <div class="meta">ордер ${fmt(s.suggest_distance)}% · откат ${fmt(s.rollback_pct)}% · TP ${signed(s.pnl_pct)}%</div>
+            <div class="meta">реком. ${fmt(s.suggest_distance)}% · ${s.vplus ? "плюс" : "минус"} ${signed(s.pnl_pct)}% / ${s.hold_ms || 300}мс</div>
           </div>
           <div class="${dirClass(s.direction)}">${s.direction} ${fmt(s.percent)}%</div>
-        </div>`).join("") || `<div class="empty">Пока нет сигналов с TP ${f.tp_min_pct ?? 0.3}%</div>`;
+        </div>`).join("") || `<div class="empty">Лента пустая</div>`;
     }
 
     ["change", "input"].forEach(ev => {

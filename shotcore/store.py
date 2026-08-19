@@ -55,6 +55,8 @@ class ShotStore:
         distance_levels: list[float] | None = None,
         retain_hours: int = 48,
         tp_min_pct: float = 0.3,
+        hold_ms: int = 300,
+        suggest_inside_pct: float = 0.05,
     ):
         self.directory = directory
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -65,6 +67,8 @@ class ShotStore:
         self.distance_levels = distance_levels or [1.11, 1.32, 1.42, 1.63, 1.78]
         self.retain_hours = max(1, int(retain_hours))
         self.tp_min_pct = max(float(tp_min_pct), 0.0)
+        self.hold_ms = max(int(hold_ms), 50)
+        self.suggest_inside_pct = max(float(suggest_inside_pct), 0.0)
         self.events: deque[dict[str, Any]] = deque(maxlen=50_000)
         self.total = 0
         self._ensure_csv()
@@ -210,10 +214,12 @@ class ShotStore:
             downs = [float(x["percent"]) for x in shots if x["direction"] == "DOWN"]
             ups = [float(x["percent"]) for x in shots if x["direction"] == "UP"]
             pnls = [float(x["pnl_pct"]) for x in shots]
-            vplus_n = sum(1 for x in shots if x["vplus"])
             last = shots[-1]
             ordered = sorted(percents)
-            suggest, level_stats = _best_distance(shots, self.distance_levels)
+            suggest, plus_n, minus_n, win_prob = _recommend_and_score(
+                shots, self.tp_min_pct, self.hold_ms, self.suggest_inside_pct
+            )
+            _, level_stats = _best_distance(shots, self.distance_levels)
             rows.append(
                 {
                     "symbol": symbol,
@@ -229,8 +235,12 @@ class ShotStore:
                     "p90": round(_percentile(ordered, 90), 4),
                     "max": round(ordered[-1], 4),
                     "suggest_distance": suggest,
-                    "vplus": vplus_n,
-                    "vplus_rate": round(100.0 * vplus_n / len(shots), 1),
+                    "score_plus": plus_n,
+                    "score_minus": minus_n,
+                    "score_text": f"{plus_n}/{minus_n}",
+                    "win_prob": win_prob,
+                    "vplus": plus_n,
+                    "vplus_rate": win_prob,
                     "avg_pnl": round(statistics.fmean(pnls), 4) if pnls else 0.0,
                     "levels": level_stats,
                     "last_percent": round(float(last["percent"]), 4),
@@ -264,6 +274,9 @@ class ShotStore:
                     "symbol",
                     "count",
                     "suggest_distance",
+                    "score_plus",
+                    "score_minus",
+                    "win_prob",
                     "vplus_rate",
                     "avg_pnl",
                     "avg",
@@ -290,10 +303,6 @@ class ShotStore:
                 continue
             if only_btc_calm and not item["btc_calm"]:
                 continue
-            if self.tp_min_pct > 0:
-                pnl = float(item.get("pnl_pct") or 0)
-                if not item.get("vplus") or pnl + 1e-12 < self.tp_min_pct:
-                    continue
             out.append(item)
         return out
 
@@ -369,6 +378,66 @@ class ShotStore:
                     + "\n"
                 )
         tmp_jsonl.replace(self.jsonl_path)
+
+
+def _recommend_and_score(
+    shots: list[dict[str, Any]],
+    tp_min: float,
+    hold_ms: int,
+    inside: float,
+) -> tuple[float, int, int, float]:
+    percents = sorted(float(x["percent"]) for x in shots if float(x.get("percent") or 0) > 0)
+    if not percents:
+        return 0.0, 0, 0, 0.0
+    typical = _percentile(percents, 50)
+    suggest = round(max(0.5, typical - inside), 2)
+    plus = 0
+    minus = 0
+    for shot in shots:
+        outcome = _outcome_at(shot, suggest, tp_min, hold_ms)
+        if outcome == "plus":
+            plus += 1
+        elif outcome == "minus":
+            minus += 1
+    total = plus + minus
+    prob = round(100.0 * plus / total, 1) if total else 0.0
+    return suggest, plus, minus, prob
+
+
+def _outcome_at(shot: dict[str, Any], distance: float, tp_min: float, hold_ms: int) -> str:
+    start = float(shot.get("start_price") or 0)
+    pct = float(shot.get("percent") or 0)
+    direction = str(shot.get("direction") or "").upper()
+    if start <= 0 or distance <= 0 or pct + 1e-9 < distance:
+        return "skip"
+    fill_px = start * (1.0 - distance / 100.0) if direction == "DOWN" else start * (1.0 + distance / 100.0)
+    path = shot.get("path") or []
+    fill_ts = 0
+    exit_px = fill_px
+    for pt in path:
+        if not isinstance(pt, (list, tuple)) or len(pt) < 2:
+            continue
+        ts = float(pt[0])
+        px = float(pt[1])
+        if fill_ts <= 0:
+            if direction == "DOWN" and px <= fill_px:
+                fill_ts = int(ts)
+            elif direction == "UP" and px >= fill_px:
+                fill_ts = int(ts)
+            continue
+        if ts <= fill_ts + hold_ms:
+            exit_px = px
+        else:
+            break
+    if fill_ts <= 0:
+        if shot.get("vplus"):
+            return "plus"
+        return "minus"
+    if direction == "DOWN":
+        pnl = (exit_px - fill_px) / fill_px * 100.0 if fill_px else 0.0
+    else:
+        pnl = (fill_px - exit_px) / fill_px * 100.0 if fill_px else 0.0
+    return "plus" if pnl + 1e-12 >= tp_min else "minus"
 
 
 def _best_distance(shots: list[dict[str, Any]], levels: list[float]) -> tuple[float, list[dict[str, Any]]]:
@@ -570,7 +639,13 @@ def _as_path(value: Any) -> list[list[float]]:
         except (TypeError, ValueError):
             continue
         if ts > 0 and px > 0:
-            out.append([ts, px])
+            row = [ts, px]
+            if len(pt) >= 3:
+                try:
+                    row.append(float(pt[2]))
+                except (TypeError, ValueError):
+                    row.append(0.0)
+            out.append(row)
     return out
 
 

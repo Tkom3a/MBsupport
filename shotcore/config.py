@@ -38,7 +38,7 @@ class FilterConfig:
 
 @dataclass
 class ShotConfig:
-    windows_ms: list[int] = field(default_factory=lambda: [300, 1000, 3000])
+    windows_ms: list[int] = field(default_factory=lambda: [500, 700, 1200])
     min_percent: float = 0.80
     min_trades: int = 2
     min_quote_volume: float = 200
@@ -49,6 +49,7 @@ class ShotConfig:
     distance_levels: list[float] = field(default_factory=lambda: [1.11, 1.32, 1.42, 1.63, 1.78])
     vplus_min_pnl: float = 0.3
     tp_min_pct: float = 0.3
+    suggest_inside_pct: float = 0.05
 
 
 @dataclass
@@ -248,6 +249,8 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     if _env_filled("TP_MIN_PCT"):
         shot.tp_min_pct = _as_float("TP_MIN_PCT", shot.tp_min_pct)
         shot.vplus_min_pnl = shot.tp_min_pct
+    if _env_filled("SUGGEST_INSIDE_PCT"):
+        shot.suggest_inside_pct = _as_float("SUGGEST_INSIDE_PCT", shot.suggest_inside_pct)
 
     if _env_filled("BTC_SYMBOL"):
         btc_filter.symbol = norm_symbol(_env("BTC_SYMBOL"))
@@ -313,6 +316,7 @@ def public_filters(cfg: AppConfig) -> dict[str, Any]:
         "shot_min_percent": cfg.shot.min_percent,
         "hold_ms": cfg.shot.hold_ms,
         "tp_min_pct": cfg.shot.tp_min_pct,
+        "suggest_inside_pct": cfg.shot.suggest_inside_pct,
         "distance_levels": cfg.shot.distance_levels,
         "vplus_min_pnl": cfg.shot.vplus_min_pnl,
         "btc_window_sec": cfg.btc_filter.window_sec,

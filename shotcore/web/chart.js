@@ -56,6 +56,22 @@
     $("chartOverlay").classList.remove("open");
   }
 
+  function ticksFromShot(shot) {
+    const raw = Array.isArray(shot.path) ? shot.path : [];
+    return raw
+      .filter((p) => p && p.length >= 2 && Number(p[0]) > 0 && Number(p[1]) > 0)
+      .map((p) => ({
+        ts: Number(p[0]),
+        price: Number(p[1]),
+        side: p.length > 2 ? Number(p[2]) : 0,
+      }));
+  }
+
+  function xByTime(ts, t0, t1, padL, plotW) {
+    if (t1 <= t0) return padL + plotW / 2;
+    return padL + (ts - t0) / (t1 - t0) * plotW;
+  }
+
   function orderPrice(shot) {
     const start = Number(shot.start_price) || 0;
     const dist = Number(shot.suggest_distance) || 0;
@@ -273,20 +289,158 @@
     }];
   }
 
+  function drawTickChart(canvas, shot, ticks, cssW, cssH, dpr) {
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const padL = 72, padR = 70, padT = 22, padB = 22;
+    const plotW = cssW - padL - padR;
+    const plotH = cssH - padT - padB;
+    const startPx = Number(shot.start_price) || ticks[0].price;
+    const extPx = Number(shot.extreme_price) || 0;
+    const fillPx = Number(shot.fill_price) || orderPrice(shot);
+    const holdMs = Math.max(50, Number(shot.hold_ms) || 300);
+    const startTs = Number(shot.start_ts) || ticks[0].ts;
+    const peakTs = Number(shot.peak_ts) || ticks[ticks.length - 1].ts;
+    const fillTs = Number(shot.fill_ts) || inferFillTs(
+      ticks.map((t) => ({ ts: t.ts, h: t.price, l: t.price, o: t.price, c: t.price })),
+      shot,
+      fillPx
+    );
+    const t0 = ticks[0].ts;
+    const t1 = ticks[ticks.length - 1].ts;
+    const prices = ticks.map((t) => t.price);
+    if (startPx) prices.push(startPx);
+    if (extPx) prices.push(extPx);
+    if (fillPx) prices.push(fillPx);
+    let pMax = Math.max.apply(null, prices);
+    let pMin = Math.min.apply(null, prices);
+    const pad = (pMax - pMin) * 0.14 || pMax * 0.002;
+    pMax += pad;
+    pMin -= pad;
+    function yAt(p) { return padT + (pMax - p) / (pMax - pMin) * plotH; }
+    function xAt(ts) { return xByTime(ts, t0, t1, padL, plotW); }
+    function pctOf(p) { return startPx ? (p - startPx) / startPx * 100 : 0; }
+
+    ctx.fillStyle = "#10141c";
+    ctx.fillRect(0, 0, cssW, cssH);
+    ctx.strokeStyle = GRID;
+    ctx.lineWidth = 1;
+    const pctMin = pctOf(pMin);
+    const pctMax = pctOf(pMax);
+    const step = niceStep(Math.abs(pctMax - pctMin));
+    const startTick = Math.floor(pctMin / step) * step;
+    for (let pct = startTick; pct <= pctMax + 1e-9; pct += step) {
+      const price = startPx * (1 + pct / 100);
+      const y = yAt(price);
+      if (y < padT || y > padT + plotH) continue;
+      ctx.beginPath();
+      ctx.moveTo(padL, y);
+      ctx.lineTo(padL + plotW, y);
+      ctx.stroke();
+      ctx.fillStyle = MUTED;
+      ctx.font = "11px Segoe UI, sans-serif";
+      ctx.textAlign = "right";
+      ctx.fillText(fmtPx(price), padL - 8, y + 4);
+      ctx.textAlign = "left";
+      ctx.fillText((pct >= 0 ? "+" : "") + fmt(pct, step < 0.5 ? 2 : 1) + "%", padL + plotW + 8, y + 4);
+    }
+
+    const xSel0 = xAt(startTs);
+    const xSel1 = xAt(Math.max(peakTs, startTs + (Number(shot.window_ms) || 600)));
+    ctx.fillStyle = "rgba(120, 80, 200, 0.16)";
+    ctx.fillRect(xSel0, padT, Math.max(6, xSel1 - xSel0), plotH);
+    ctx.strokeStyle = "rgba(160, 120, 220, 0.7)";
+    ctx.strokeRect(xSel0, padT, Math.max(6, xSel1 - xSel0), plotH);
+
+    ctx.beginPath();
+    ctx.strokeStyle = "#c5c0d8";
+    ctx.lineWidth = 1.2;
+    ticks.forEach((t, i) => {
+      const x = xAt(t.ts);
+      const y = yAt(t.price);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    ticks.forEach((t) => {
+      ctx.beginPath();
+      ctx.fillStyle = t.side > 0 ? UP : DOWN;
+      ctx.arc(xAt(t.ts), yAt(t.price), 2.4, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    if (startPx) {
+      const y = yAt(startPx);
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = MUTED;
+      ctx.beginPath();
+      ctx.moveTo(padL, y);
+      ctx.lineTo(padL + plotW, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    if (fillPx && fillTs) {
+      const x0 = xAt(fillTs);
+      let x1 = xAt(fillTs + holdMs);
+      if (x1 < x0 + 4) x1 = x0 + 4;
+      ctx.strokeStyle = AMBER;
+      ctx.lineWidth = 2.4;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(x0, yAt(fillPx));
+      ctx.lineTo(x1, yAt(fillPx));
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(x0, yAt(fillPx), 4, 0, Math.PI * 2);
+      ctx.fillStyle = AMBER;
+      ctx.fill();
+      const dist = Number(shot.suggest_distance) || 0;
+      pill(ctx, `ордер ${fmt(dist, 2)}% · ${holdMs} мс`, Math.min(x0, padL + plotW - 140), yAt(fillPx) - 8, "#d7a13bcc", "#1a1408");
+    }
+
+    const dur = Math.max(1, peakTs - startTs);
+    const chg = startPx && extPx ? (extPx - startPx) / startPx * 100 : Number(shot.percent || 0) * (shot.direction === "UP" ? 1 : -1);
+    const boxX = Math.min(xSel0 + 8, padL + plotW - 210);
+    const boxY = padT + plotH - 78;
+    ctx.fillStyle = "rgba(70, 40, 120, 0.88)";
+    ctx.fillRect(boxX, boxY, 200, 70);
+    ctx.fillStyle = TEXT;
+    ctx.font = "11px Segoe UI, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText("Время: " + (dur >= 1000 ? fmt(dur / 1000, 2) + " с" : dur + " мс"), boxX + 10, boxY + 16);
+    ctx.fillText("Исходная: " + fmtPx(startPx), boxX + 10, boxY + 34);
+    ctx.fillStyle = chg >= 0 ? UP : DOWN;
+    ctx.fillText("Изменение: " + (chg >= 0 ? "+" : "") + fmt(chg, 2) + "%", boxX + 10, boxY + 52);
+
+    ctx.fillStyle = MUTED;
+    ctx.font = "10px Segoe UI, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(fmtTime(t0), xAt(t0), cssH - 6);
+    ctx.fillText(fmtTime(peakTs), xAt(peakTs), cssH - 6);
+    ctx.fillText(fmtTime(t1), xAt(t1), cssH - 6);
+
+    canvas.onmousemove = function (ev) {
+      const rect = canvas.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      let best = ticks[0];
+      let bestD = 1e9;
+      ticks.forEach((t) => {
+        const d = Math.abs(xAt(t.ts) - x);
+        if (d < bestD) { bestD = d; best = t; }
+      });
+      const dp = pctOf(best.price);
+      $("chartHint").textContent =
+        `${fmtTime(best.ts)}  ${fmtPx(best.price)}  ${best.side > 0 ? "buy" : "sell"}  ` +
+        `${dp >= 0 ? "+" : ""}${fmt(dp, 2)}% от исходной`;
+    };
+  }
+
   function drawChart(payload) {
     const canvas = $("chartCanvas");
     const shot = payload.shot || {};
+    const ticks = ticksFromShot(shot);
     let candles = payload.candles || [];
-    if (!candles.length) candles = synthetic(shot);
-    if (!candles.length) {
-      $("chartHint").textContent = "Нет свечей OKX вокруг этого времени";
-      const ctx = canvas.getContext("2d");
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      return;
-    }
-    $("chartHint").textContent =
-      "Янтарная линия — виртуальный ордер на 0.3 с после входа. Голубая — цена за это же время. Наведите на свечу: объём и USDT.";
-
     const wrap = canvas.parentElement;
     const cssW = Math.max(640, wrap.clientWidth);
     const cssH = 520;
@@ -295,6 +449,22 @@
     canvas.height = Math.floor(cssH * dpr);
     canvas.style.width = cssW + "px";
     canvas.style.height = cssH + "px";
+
+    if (ticks.length >= 4) {
+      $("chartHint").textContent =
+        "Тики как в MoonTrader: зелёный buy / красный sell. Фиолетовая рамка — окно измерения. Янтарная линия ордера живёт 0.3 с после входа.";
+      drawTickChart(canvas, shot, ticks, cssW, cssH, dpr);
+      return;
+    }
+    if (!candles.length) candles = synthetic(shot);
+    if (!candles.length) {
+      $("chartHint").textContent = "Нет тиков и свечей вокруг этого времени";
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+    $("chartHint").textContent =
+      "Нет сохранённой ленты тиков — показаны свечи OKX. Янтарная линия ордера — 0.3 с после входа.";
     const ctx = canvas.getContext("2d");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 

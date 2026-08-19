@@ -35,6 +35,8 @@ class ShotCore:
             distance_levels=cfg.shot.distance_levels,
             retain_hours=cfg.output.retain_hours,
             tp_min_pct=cfg.shot.tp_min_pct,
+            hold_ms=cfg.shot.hold_ms,
+            suggest_inside_pct=cfg.shot.suggest_inside_pct,
         )
         self.btc = BtcDeltaTracker(
             cfg.btc_filter.symbol,
@@ -71,6 +73,7 @@ class ShotCore:
                 distance_levels=self.cfg.shot.distance_levels,
                 vplus_min_pnl=self.cfg.shot.vplus_min_pnl,
                 tp_min_pct=self.cfg.shot.tp_min_pct,
+                suggest_inside_pct=self.cfg.shot.suggest_inside_pct,
             )
             self.detectors[symbol] = det
         return det

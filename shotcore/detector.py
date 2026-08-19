@@ -74,6 +74,7 @@ class SymbolDetector:
         distance_levels: list[float] | None = None,
         vplus_min_pnl: float = 0.3,
         tp_min_pct: float = 0.3,
+        suggest_inside_pct: float = 0.05,
     ):
         self.symbol = symbol
         self.windows_ms = sorted(windows_ms)
@@ -86,13 +87,14 @@ class SymbolDetector:
         self.distance_levels = distance_levels or [1.11, 1.32, 1.42, 1.63, 1.78]
         self.tp_min_pct = max(float(tp_min_pct), float(vplus_min_pnl), 0.0)
         self.vplus_min_pnl = self.tp_min_pct
+        self.suggest_inside_pct = max(float(suggest_inside_pct), 0.0)
         self.trades: Deque[Trade] = deque()
         self._open: dict[str, _OpenShot] = {}
         self._refractory_until: dict[str, int] = {}
         self.max_keep_ms = max(self.windows_ms) + cooldown_ms + hold_ms + 20000
-        self.quiet_ms = max(hold_ms, 2000)
+        self.quiet_ms = max(hold_ms, 400)
         self.refractory_ms = max(refractory_ms, hold_ms)
-        self.max_shot_ms = 20000
+        self.max_shot_ms = 4000
 
     def on_trade(self, ts: int, price: float, qty: float, side: str) -> list[ShotEvent]:
         if price <= 0:
@@ -150,12 +152,7 @@ class SymbolDetector:
             opened = self._open[direction]
             quiet = ts - opened.peak_ts >= self.quiet_ms
             timed_out = ts - opened.start_ts >= self.max_shot_ms
-            if not quiet:
-                continue
-            tp_hit = self._has_tradable_tp(opened, price)
-            if not tp_hit:
-                if timed_out:
-                    self._drop(direction, ts)
+            if not quiet and not timed_out:
                 continue
             event = self._finish(opened, ts, price, metrics)
             self._drop(direction, ts)
@@ -166,13 +163,6 @@ class SymbolDetector:
     def _drop(self, direction: str, ts: int) -> None:
         self._refractory_until[direction] = ts + self.refractory_ms
         self._open.pop(direction, None)
-
-    def _has_tradable_tp(self, opened: _OpenShot, last_price: float) -> bool:
-        for distance in self.distance_levels:
-            row = self._simulate_distance(opened, distance, last_price)
-            if row["filled"] and row["vplus"]:
-                return True
-        return False
 
     def _finish(
         self,
@@ -190,8 +180,7 @@ class SymbolDetector:
             else:
                 extras[window_ms] = (high - ref) / ref * 100.0
         report, suggest, pnl, vplus, exit_price, rollback, fill_ts, fill_price = self._simulate(opened, last_price)
-        if not vplus or pnl + 1e-12 < self.tp_min_pct or suggest <= 0:
-            return None
+        tape_end = (fill_ts + self.hold_ms) if fill_ts else ts
         return ShotEvent(
             symbol=self.symbol,
             direction=opened.direction,
@@ -204,12 +193,12 @@ class SymbolDetector:
             last_price=last_price,
             trades=opened.trades,
             quote_volume=round(opened.quote_volume, 2),
-            duration_ms=max(0, ts - opened.start_ts),
+            duration_ms=max(0, opened.peak_ts - opened.start_ts),
             btc_delta_pct=0.0,
             btc_calm=False,
-            pct_300=round(extras.get(300, 0.0), 4),
-            pct_1000=round(extras.get(1000, 0.0), 4),
-            pct_3000=round(extras.get(3000, 0.0), 4),
+            pct_300=round(extras.get(500, extras.get(300, 0.0)), 4),
+            pct_1000=round(extras.get(700, extras.get(1000, 0.0)), 4),
+            pct_3000=round(extras.get(1200, extras.get(3000, 0.0)), 4),
             hold_ms=self.hold_ms,
             exit_price=exit_price,
             rollback_pct=round(rollback, 4),
@@ -219,7 +208,7 @@ class SymbolDetector:
             distance_report=report,
             fill_ts=fill_ts,
             fill_price=fill_price,
-            path=self._path_after_fill(fill_ts, fill_price, last_price, fill_ts + self.hold_ms if fill_ts else ts),
+            path=self._tick_tape(opened.start_ts, max(tape_end, opened.peak_ts)),
         )
 
     def _simulate(
@@ -228,23 +217,22 @@ class SymbolDetector:
         rollback = self._bounce_from_extreme(opened, last_price)
         levels = sorted({round(x, 4) for x in self.distance_levels if x > 0})
         report: list[dict[str, Any]] = []
-        chosen_pnl = 0.0
-        chosen_vplus = False
-        suggest = 0.0
-        exit_price = last_price
-        fill_ts = 0
-        fill_price = 0.0
         for distance in levels:
-            row = self._simulate_distance(opened, distance, last_price)
-            report.append(row)
-            if row["filled"] and row["vplus"] and distance >= suggest:
-                suggest = distance
-                chosen_pnl = row["pnl_pct"]
-                chosen_vplus = True
-                exit_price = float(row.get("exit_price") or last_price)
-                fill_ts = int(row.get("fill_ts") or 0)
-                fill_price = float(row.get("fill_price") or 0)
-        return report, round(suggest, 2), chosen_pnl, chosen_vplus, exit_price, rollback, fill_ts, fill_price
+            report.append(self._simulate_distance(opened, distance, last_price))
+        suggest = round(max(0.01, opened.peak_pct - self.suggest_inside_pct), 2)
+        chosen = self._simulate_distance(opened, suggest, last_price)
+        if not any(abs(float(row["distance"]) - suggest) < 1e-6 for row in report):
+            report.append(chosen)
+        return (
+            report,
+            suggest,
+            float(chosen.get("pnl_pct") or 0),
+            bool(chosen.get("vplus")),
+            float(chosen.get("exit_price") or last_price),
+            rollback,
+            int(chosen.get("fill_ts") or 0),
+            float(chosen.get("fill_price") or 0),
+        )
 
     def _simulate_distance(self, opened: _OpenShot, distance: float, last_price: float) -> dict[str, Any]:
         if opened.peak_pct + 1e-9 < distance or opened.start_price <= 0:
@@ -256,13 +244,14 @@ class SymbolDetector:
         fill_ts = self._first_cross(opened.start_ts, opened.direction, fill_px)
         if fill_ts is None:
             return {"distance": distance, "filled": False, "vplus": False, "pnl_pct": 0.0, "exit_price": 0.0, "fill_ts": 0, "fill_price": 0.0}
-        pnl, exit_px, _exit_ts = self._mfe_after_fill(fill_ts, fill_px, opened.direction, last_price)
+        hold_px = self._price_at(fill_ts + self.hold_ms, last_price)
+        pnl = self._pnl_pct(opened.direction, fill_px, hold_px)
         return {
             "distance": distance,
             "filled": True,
             "vplus": pnl + 1e-12 >= self.tp_min_pct,
             "pnl_pct": round(pnl, 4),
-            "exit_price": exit_px,
+            "exit_price": hold_px,
             "fill_ts": fill_ts,
             "fill_price": fill_px,
         }
@@ -305,6 +294,20 @@ class SymbolDetector:
                 best_pnl = pnl
                 best_px = last_price
         return best_pnl, best_px, best_ts
+
+    def _tick_tape(self, start_ts: int, end_ts: int) -> list[list[float]]:
+        pad = 1500
+        lo = start_ts - pad
+        hi = end_ts + pad
+        out: list[list[float]] = []
+        for trade in self.trades:
+            if trade.ts < lo:
+                continue
+            if trade.ts > hi:
+                break
+            side = 1.0 if str(trade.side).lower() in {"buy", "b"} else -1.0
+            out.append([float(trade.ts), float(trade.price), side])
+        return _downsample_path(out, 240)
 
     def _path_after_fill(
         self, fill_ts: int, fill_px: float, last_price: float, end_ts: int
