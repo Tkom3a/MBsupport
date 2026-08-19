@@ -34,6 +34,7 @@ class ShotCore:
             tz_name=cfg.web.timezone,
             distance_levels=cfg.shot.distance_levels,
             retain_hours=cfg.output.retain_hours,
+            tp_min_pct=cfg.shot.tp_min_pct,
         )
         self.btc = BtcDeltaTracker(
             cfg.btc_filter.symbol,
@@ -69,6 +70,7 @@ class ShotCore:
                 refractory_ms=self.cfg.shot.refractory_ms,
                 distance_levels=self.cfg.shot.distance_levels,
                 vplus_min_pnl=self.cfg.shot.vplus_min_pnl,
+                tp_min_pct=self.cfg.shot.tp_min_pct,
             )
             self.detectors[symbol] = det
         return det
@@ -92,7 +94,7 @@ class ShotCore:
                 text = (
                     f"{event.direction} {event.symbol} {lever} "
                     f"прострел {event.percent:.2f}%  ордер {event.suggest_distance:.2f}%  "
-                    f"PnL {event.pnl_pct:+.3f}% / {event.hold_ms}мс"
+                    f"TP {event.pnl_pct:+.3f}% (мин {self.cfg.shot.tp_min_pct:.2f}%)"
                 )
                 try:
                     self._tg_queue.put_nowait(text)

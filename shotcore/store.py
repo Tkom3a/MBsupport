@@ -54,6 +54,7 @@ class ShotStore:
         tz_name: str = "UTC",
         distance_levels: list[float] | None = None,
         retain_hours: int = 48,
+        tp_min_pct: float = 0.3,
     ):
         self.directory = directory
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -63,6 +64,7 @@ class ShotStore:
         self.tz = _zone(tz_name)
         self.distance_levels = distance_levels or [1.11, 1.32, 1.42, 1.63, 1.78]
         self.retain_hours = max(1, int(retain_hours))
+        self.tp_min_pct = max(float(tp_min_pct), 0.0)
         self.events: deque[dict[str, Any]] = deque(maxlen=50_000)
         self.total = 0
         self._ensure_csv()
@@ -172,8 +174,8 @@ class ShotStore:
         )
         return stored or row
 
-    def recent(self, limit: int = 80, lookback_min: int = 0, direction: str = "") -> list[dict[str, Any]]:
-        items = self._filtered(lookback_min, direction)
+    def recent(self, limit: int = 80, lookback_min: int = 0, direction: str = "", only_btc_calm: bool = False) -> list[dict[str, Any]]:
+        items = self._filtered(lookback_min, direction, only_btc_calm)
         items = items[-limit:]
         items.reverse()
         return [_public_event(item, self.tz) for item in items]
@@ -270,6 +272,10 @@ class ShotStore:
                 continue
             if only_btc_calm and not item["btc_calm"]:
                 continue
+            if self.tp_min_pct > 0:
+                pnl = float(item.get("pnl_pct") or 0)
+                if not item.get("vplus") or pnl + 1e-12 < self.tp_min_pct:
+                    continue
             out.append(item)
         return out
 

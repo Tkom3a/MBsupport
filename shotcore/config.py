@@ -47,7 +47,8 @@ class ShotConfig:
     hold_ms: int = 300
     refractory_ms: int = 1_000
     distance_levels: list[float] = field(default_factory=lambda: [1.11, 1.32, 1.42, 1.63, 1.78])
-    vplus_min_pnl: float = 0.0
+    vplus_min_pnl: float = 0.3
+    tp_min_pct: float = 0.3
 
 
 @dataclass
@@ -243,6 +244,10 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         shot.distance_levels = _as_floats("DISTANCE_LEVELS", shot.distance_levels)
     if _env_filled("VPLUS_MIN_PNL"):
         shot.vplus_min_pnl = _as_float("VPLUS_MIN_PNL", shot.vplus_min_pnl)
+        shot.tp_min_pct = shot.vplus_min_pnl
+    if _env_filled("TP_MIN_PCT"):
+        shot.tp_min_pct = _as_float("TP_MIN_PCT", shot.tp_min_pct)
+        shot.vplus_min_pnl = shot.tp_min_pct
 
     if _env_filled("BTC_SYMBOL"):
         btc_filter.symbol = norm_symbol(_env("BTC_SYMBOL"))
@@ -307,6 +312,7 @@ def public_filters(cfg: AppConfig) -> dict[str, Any]:
         "shot_windows_ms": cfg.shot.windows_ms,
         "shot_min_percent": cfg.shot.min_percent,
         "hold_ms": cfg.shot.hold_ms,
+        "tp_min_pct": cfg.shot.tp_min_pct,
         "distance_levels": cfg.shot.distance_levels,
         "vplus_min_pnl": cfg.shot.vplus_min_pnl,
         "btc_window_sec": cfg.btc_filter.window_sec,

@@ -131,7 +131,8 @@ async def _shots(request: web.Request) -> web.Response:
     lookback = _int(request, "lookback", core.cfg.web.stats_lookback_min)
     limit = min(_int(request, "limit", 80), 300)
     direction = str(request.rel_url.query.get("direction") or "")
-    return _json({"shots": core.store.recent(limit=limit, lookback_min=lookback, direction=direction)})
+    only_calm = str(request.rel_url.query.get("btc_calm") or "") in {"1", "true"}
+    return _json({"shots": core.store.recent(limit=limit, lookback_min=lookback, direction=direction, only_btc_calm=only_calm)})
 
 
 def _get_chart_lock() -> asyncio.Lock:

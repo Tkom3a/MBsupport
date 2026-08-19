@@ -117,13 +117,13 @@
   <header>
     <div>
       <h1>Shot<span>Core</span> — разведка дистанций</h1>
-      <div class="meta" id="subtitle">Ордер заранее → вход на простреле → выход через 0.3 с</div>
+      <div class="meta" id="subtitle">Только прострелы с откатом: ордер закрылся бы в плюс при TP 0.3%</div>
     </div>
     <div class="live"><span class="dot"></span><span id="live">ожидание данных</span></div>
   </header>
   <div class="kpis">
     <div class="kpi"><div class="lbl">Пары с прострелами</div><div class="val" id="kpiPairs">—</div></div>
-    <div class="kpi"><div class="lbl">Прострелов</div><div class="val" id="kpiShots">—</div></div>
+    <div class="kpi"><div class="lbl">Прострелов с TP</div><div class="val" id="kpiShots">—</div></div>
     <div class="kpi"><div class="lbl">Активных рынков</div><div class="val" id="kpiActive">—</div></div>
     <div class="kpi"><div class="lbl">Следим пар</div><div class="val" id="kpiWatch">—</div></div>
   </div>
@@ -163,8 +163,7 @@
     <section class="panel feed" id="feed"></section>
   </div>
   <div class="note">
-    Клик по событию в ленте или по строке пары открывает график прострела (свечи, линейка %, объём и USDT в свече).
-    Плечо — максимальное доступное на контракте OKX, в коридоре x20…x100. Один прострел = один импульс, без пачек.
+    Клик по событию в ленте или по строке пары открывает график. В списке только импульсы с обратным ходом ≥ TP, на которых лимит на дистанции закрылся бы в плюс.
   </div>
   <div class="mt-wrap">
     <section class="mt-box">
@@ -313,9 +312,9 @@
       const board = stats.active_markets || [];
       const activeN = board.filter(m => m.subscribed).length;
       document.getElementById("live").textContent =
-        `${stats.symbols_watched || 0} в подписке · выход ${f.hold_ms || 300} мс`;
+        `${stats.symbols_watched || 0} в подписке · TP ${f.tp_min_pct ?? 0.3}%`;
       document.getElementById("subtitle").textContent =
-        `${f.inst_type} ${f.quote} · ордер заранее, закрытие через ${f.hold_ms || 300} мс · плечо x${f.min_leverage}–x${f.max_leverage}`;
+        `${f.inst_type} ${f.quote} · только откат ≥ TP ${f.tp_min_pct ?? 0.3}% · плечо x${f.min_leverage}–x${f.max_leverage}`;
       document.getElementById("kpiPairs").textContent = stats.pairs ?? 0;
       document.getElementById("kpiShots").textContent = stats.shots ?? 0;
       document.getElementById("kpiActive").textContent = activeN;
@@ -334,6 +333,7 @@
         ["Ignore first", f.active_ignore_first],
         ["Sort", (f.active_sort_sec || 15) + " s"],
         ["Min %", f.shot_min_percent],
+        ["TP", (f.tp_min_pct ?? 0.3) + "%"],
         ["Hold", (f.hold_ms || 300) + " мс"],
         ["Distance", (f.distance_levels || []).join(" / ")],
         ["BTC ±", `${f.btc_range_pct}% / ${f.btc_window_sec}с`],
@@ -350,7 +350,7 @@
       const rows = (stats.rows || []).filter(r => !needle || r.symbol.toLowerCase().includes(needle));
       const body = document.getElementById("rows");
       if (!rows.length) {
-        body.innerHTML = `<tr><td class="empty" colspan="6">Нет прострелов по текущим фильтрам и времени</td></tr>`;
+        body.innerHTML = `<tr><td class="empty" colspan="6">Нет прострелов с откатом TP ${f.tp_min_pct ?? 0.3}% в выбранном окне</td></tr>`;
       } else {
         body.innerHTML = rows.map(r => `
           <tr class="clickable" data-symbol="${r.symbol}" data-ts="${r.last_ts || 0}">
@@ -366,10 +366,10 @@
         <div class="feed-item" data-symbol="${s.symbol}" data-ts="${s.peak_ts || 0}" title="Открыть график прострела">
           <div class="meta">${s.time}</div>
           <div>${s.symbol} <span class="amber">${lever(s.lever)}</span>
-            <div class="meta">ордер ${fmt(s.suggest_distance)}% · глубина ${fmt(s.percent)}%</div>
+            <div class="meta">ордер ${fmt(s.suggest_distance)}% · откат ${fmt(s.rollback_pct)}% · TP ${signed(s.pnl_pct)}%</div>
           </div>
           <div class="${dirClass(s.direction)}">${s.direction} ${fmt(s.percent)}%</div>
-        </div>`).join("") || `<div class="empty">Лента пустая</div>`;
+        </div>`).join("") || `<div class="empty">Пока нет сигналов с TP ${f.tp_min_pct ?? 0.3}%</div>`;
     }
 
     ["change", "input"].forEach(ev => {
