@@ -46,7 +46,7 @@
     .chip { color: var(--muted); font-size: 12px; }
     .chip b { color: var(--text); font-weight: 600; }
     input { min-width: 180px; }
-    .mt-wrap { display: grid; grid-template-columns: 1fr 1.15fr; gap: 16px; padding: 0 24px 16px; }
+    .mt-wrap { display: grid; grid-template-columns: 1fr 1.15fr; gap: 16px; padding: 0 24px 24px; }
     .mt-box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
     .mt-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-weight: 650; }
     .mt-row {
@@ -80,7 +80,12 @@
     tbody tr.clickable { cursor: pointer; }
     .empty { padding: 28px; color: var(--muted); }
     .note { padding: 0 24px 16px; color: var(--muted); font-size: 12px; }
-    .panel-head { display: flex; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+    .panel-head {
+      display: flex; justify-content: space-between; align-items: center; gap: 10px;
+      padding: 10px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap;
+    }
+    .panel-head .head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .lever-filter { min-width: 118px; padding: 5px 8px; font-size: 12px; }
     .overlay {
       display: none; position: fixed; inset: 0; background: #05070ccc; z-index: 40;
       align-items: center; justify-content: center; padding: 24px;
@@ -102,9 +107,6 @@
     .chart-canvas-wrap { padding: 0 8px 8px; background: #10141c; }
     #chartCanvas { display: block; width: 100%; height: 520px; }
     #chartHint { padding: 8px 16px 12px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-    .empty { padding: 28px; color: var(--muted); }
-    .note { padding: 0 24px 16px; color: var(--muted); font-size: 12px; }
-    .panel-head { display: flex; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--line); }
     @media (max-width: 1100px) {
       .grid, .kpis, .mt-wrap, .mt-nums { grid-template-columns: 1fr; }
       header { flex-direction: column; align-items: flex-start; }
@@ -142,6 +144,28 @@
     <input id="search" placeholder="поиск пары, например SOL" />
   </div>
   <div class="chips" id="chips"></div>
+  <div class="grid">
+    <section class="panel">
+      <table>
+        <thead>
+          <tr>
+            <th>Пара</th>
+            <th>Плечо</th>
+            <th>Прострелы</th>
+            <th>Дистанция ордера</th>
+            <th>Глубина p50 / p90</th>
+            <th>Последний</th>
+          </tr>
+        </thead>
+        <tbody id="rows"><tr><td class="empty" colspan="6">Пока нет прострелов в выбранном окне</td></tr></tbody>
+      </table>
+    </section>
+    <section class="panel feed" id="feed"></section>
+  </div>
+  <div class="note">
+    Клик по событию в ленте или по строке пары открывает график прострела (свечи, линейка %, объём и USDT в свече).
+    Плечо — максимальное доступное на контракте OKX, в коридоре x20…x100. Один прострел = один импульс, без пачек.
+  </div>
   <div class="mt-wrap">
     <section class="mt-box">
       <div class="mt-head"><input type="checkbox" checked disabled /> Фильтр активных рынков</div>
@@ -163,8 +187,13 @@
     </section>
     <section class="panel">
       <div class="panel-head">
-        <h2>Список как в MoonTrader</h2>
-        <span class="meta" id="boardMeta">сортировка: 1ч Δ ↓, затем |15м оΔ|</span>
+        <h2>Список торговых пар</h2>
+        <div class="head-actions">
+          <select id="leverFilter" class="lever-filter" title="Фильтр по макс. плечу пары">
+            <option value="">Все плечи</option>
+          </select>
+          <span class="meta" id="boardMeta">сортировка: 1ч Δ ↓, затем |15м оΔ|</span>
+        </div>
       </div>
       <table>
         <thead>
@@ -184,26 +213,6 @@
   <div class="note">
     Эти же поля поставьте в MoonTrader → Active markets / Фильтр активных рынков.
     Сортировка по убыванию 1ч Δ, затем |15м оΔ|. Первые N выкидываются как шум, дальше берутся 25 пар.
-    Плечо — максимальное доступное на контракте OKX, в коридоре x20…x100. Один прострел = один импульс, без пачек.
-    Клик по событию в ленте или по строке пары открывает график прострела (свечи, линейка %, объём и USDT в свече).
-  </div>
-  <div class="grid">
-    <section class="panel">
-      <table>
-        <thead>
-          <tr>
-            <th>Пара</th>
-            <th>Плечо</th>
-            <th>Прострелы</th>
-            <th>Дистанция ордера</th>
-            <th>Глубина p50 / p90</th>
-            <th>Последний</th>
-          </tr>
-        </thead>
-        <tbody id="rows"><tr><td class="empty" colspan="6">Пока нет прострелов в выбранном окне</td></tr></tbody>
-      </table>
-    </section>
-    <section class="panel feed" id="feed"></section>
   </div>
   <div class="overlay" id="chartOverlay">
     <div class="chart-box">
@@ -226,8 +235,50 @@
     const directionEl = document.getElementById("direction");
     const btcCalmEl = document.getElementById("btcCalm");
     const searchEl = document.getElementById("search");
+    const leverFilterEl = document.getElementById("leverFilter");
     const savedLookback = localStorage.getItem("shotcore_lookback");
     if (savedLookback != null) lookbackEl.value = savedLookback;
+    const savedLever = localStorage.getItem("shotcore_lever");
+    let lastBoard = [];
+
+    function leverKey(n) {
+      const v = Math.round(Number(n) || 0);
+      return v ? String(v) : "";
+    }
+
+    function syncLeverOptions(board) {
+      const current = leverFilterEl.value || savedLever || "";
+      const values = [...new Set(board.map(m => leverKey(m.lever)).filter(Boolean))]
+        .map(Number)
+        .sort((a, b) => a - b);
+      leverFilterEl.innerHTML = `<option value="">Все плечи</option>` +
+        values.map(v => `<option value="${v}">x${v}</option>`).join("");
+      if (current && values.includes(Number(current))) leverFilterEl.value = current;
+      else leverFilterEl.value = "";
+    }
+
+    function renderBoard(board) {
+      const boardBody = document.getElementById("board");
+      const wanted = leverFilterEl.value;
+      const rows = wanted ? board.filter(m => leverKey(m.lever) === wanted) : board;
+      if (!board.length) {
+        boardBody.innerHTML = `<tr><td class="empty" colspan="6">Ждём первую сортировку активных рынков</td></tr>`;
+        return;
+      }
+      if (!rows.length) {
+        boardBody.innerHTML = `<tr><td class="empty" colspan="6">Нет пар с плечом x${wanted}</td></tr>`;
+        return;
+      }
+      boardBody.innerHTML = rows.map(m => `
+        <tr class="${m.ignored ? "muted-row" : ""}">
+          <td>${m.rank}</td>
+          <td>${m.inst_id}</td>
+          <td class="amber">${lever(m.lever)}</td>
+          <td>${fmt(m.delta_1h)}</td>
+          <td>${signed(m.open_delta_15m)}</td>
+          <td class="${m.subscribed ? "tag on" : "tag"}">${m.ignored ? "игнор" : (m.subscribed ? "активен" : "")}</td>
+        </tr>`).join("");
+    }
 
     function api(path) {
       const url = new URL(path, location.origin);
@@ -274,8 +325,6 @@
       document.getElementById("fMax").textContent = f.active_max_markets ?? 25;
       document.getElementById("fIgnore").textContent = f.active_ignore_first ?? 2;
       document.getElementById("fSort").textContent = (f.active_sort_sec ?? 15) + " s";
-      document.getElementById("boardMeta").textContent =
-        `пул ${stats.universe_size || 0} → skip ${f.active_ignore_first ?? 2} → ${activeN}`;
       document.getElementById("chips").innerHTML = [
         ["QAV", `${f.qav_24h_min}–${f.qav_24h_max}`],
         ["Плечо", `x${f.min_leverage}–x${f.max_leverage}`],
@@ -290,20 +339,12 @@
         ["BTC ±", `${f.btc_range_pct}% / ${f.btc_window_sec}с`],
       ].map(([k, v]) => `<span class="chip">${k}: <b>${v}</b></span>`).join("");
 
-      const boardBody = document.getElementById("board");
-      if (!board.length) {
-        boardBody.innerHTML = `<tr><td class="empty" colspan="6">Ждём первую сортировку активных рынков</td></tr>`;
-      } else {
-        boardBody.innerHTML = board.map(m => `
-          <tr class="${m.ignored ? "muted-row" : ""}">
-            <td>${m.rank}</td>
-            <td>${m.inst_id}</td>
-            <td class="amber">${lever(m.lever)}</td>
-            <td>${fmt(m.delta_1h)}</td>
-            <td>${signed(m.open_delta_15m)}</td>
-            <td class="${m.subscribed ? "tag on" : "tag"}">${m.ignored ? "игнор" : (m.subscribed ? "активен" : "")}</td>
-          </tr>`).join("");
-      }
+      lastBoard = board;
+      syncLeverOptions(board);
+      renderBoard(board);
+      document.getElementById("boardMeta").textContent =
+        `пул ${stats.universe_size || 0} → skip ${f.active_ignore_first ?? 2} → ${activeN}` +
+        (leverFilterEl.value ? ` · x${leverFilterEl.value}` : "");
 
       const needle = searchEl.value.trim().toLowerCase();
       const rows = (stats.rows || []).filter(r => !needle || r.symbol.toLowerCase().includes(needle));
@@ -336,6 +377,14 @@
       directionEl.addEventListener(ev, () => tick().catch(console.error));
       btcCalmEl.addEventListener(ev, () => tick().catch(console.error));
       searchEl.addEventListener(ev, () => tick().catch(console.error));
+    });
+    leverFilterEl.addEventListener("change", () => {
+      localStorage.setItem("shotcore_lever", leverFilterEl.value);
+      renderBoard(lastBoard);
+      const shown = leverFilterEl.value ? lastBoard.filter(m => leverKey(m.lever) === leverFilterEl.value).length : lastBoard.length;
+      const meta = document.getElementById("boardMeta");
+      const base = (meta.textContent || "").split(" · ")[0];
+      meta.textContent = base + (leverFilterEl.value ? ` · x${leverFilterEl.value} (${shown})` : "");
     });
     document.getElementById("feed").addEventListener("click", (ev) => {
       const item = ev.target.closest(".feed-item");
