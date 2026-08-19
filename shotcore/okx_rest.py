@@ -112,8 +112,8 @@ class OkxRest:
         now = int(time.time() * 1000)
         age = now - ts_ms
         specs = (
-            ("1s", 100, 80_000, 25_000),
-            ("1m", 80, 50 * 60_000, 15 * 60_000),
+            ("1s", 100, 40_000, 55_000),
+            ("1m", 80, 40 * 60_000, 20 * 60_000),
         )
         for bar, limit, before_ms, after_ms in specs:
             history = age > before_ms + after_ms + 5_000

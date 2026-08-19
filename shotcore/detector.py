@@ -40,6 +40,9 @@ class ShotEvent:
     suggest_distance: float = 0.0
     distance_report: list[dict[str, Any]] = field(default_factory=list)
     lever: float = 0.0
+    fill_ts: int = 0
+    fill_price: float = 0.0
+    path: list[list[float]] = field(default_factory=list)
 
 
 @dataclass
@@ -186,7 +189,7 @@ class SymbolDetector:
                 extras[window_ms] = (ref - low) / ref * 100.0
             else:
                 extras[window_ms] = (high - ref) / ref * 100.0
-        report, suggest, pnl, vplus, exit_price, rollback = self._simulate(opened, last_price)
+        report, suggest, pnl, vplus, exit_price, rollback, fill_ts, fill_price = self._simulate(opened, last_price)
         if not vplus or pnl + 1e-12 < self.tp_min_pct or suggest <= 0:
             return None
         return ShotEvent(
@@ -214,11 +217,14 @@ class SymbolDetector:
             pnl_pct=round(pnl, 4),
             suggest_distance=suggest,
             distance_report=report,
+            fill_ts=fill_ts,
+            fill_price=fill_price,
+            path=self._path_after_fill(fill_ts, fill_price, last_price, ts),
         )
 
     def _simulate(
         self, opened: _OpenShot, last_price: float
-    ) -> tuple[list[dict[str, Any]], float, float, bool, float, float]:
+    ) -> tuple[list[dict[str, Any]], float, float, bool, float, float, int, float]:
         rollback = self._bounce_from_extreme(opened, last_price)
         levels = sorted({round(x, 4) for x in self.distance_levels if x > 0})
         report: list[dict[str, Any]] = []
@@ -226,6 +232,8 @@ class SymbolDetector:
         chosen_vplus = False
         suggest = 0.0
         exit_price = last_price
+        fill_ts = 0
+        fill_price = 0.0
         for distance in levels:
             row = self._simulate_distance(opened, distance, last_price)
             report.append(row)
@@ -234,25 +242,29 @@ class SymbolDetector:
                 chosen_pnl = row["pnl_pct"]
                 chosen_vplus = True
                 exit_price = float(row.get("exit_price") or last_price)
-        return report, round(suggest, 2), chosen_pnl, chosen_vplus, exit_price, rollback
+                fill_ts = int(row.get("fill_ts") or 0)
+                fill_price = float(row.get("fill_price") or 0)
+        return report, round(suggest, 2), chosen_pnl, chosen_vplus, exit_price, rollback, fill_ts, fill_price
 
     def _simulate_distance(self, opened: _OpenShot, distance: float, last_price: float) -> dict[str, Any]:
         if opened.peak_pct + 1e-9 < distance or opened.start_price <= 0:
-            return {"distance": distance, "filled": False, "vplus": False, "pnl_pct": 0.0, "exit_price": 0.0}
+            return {"distance": distance, "filled": False, "vplus": False, "pnl_pct": 0.0, "exit_price": 0.0, "fill_ts": 0, "fill_price": 0.0}
         if opened.direction == "DOWN":
             fill_px = opened.start_price * (1.0 - distance / 100.0)
         else:
             fill_px = opened.start_price * (1.0 + distance / 100.0)
         fill_ts = self._first_cross(opened.start_ts, opened.direction, fill_px)
         if fill_ts is None:
-            return {"distance": distance, "filled": False, "vplus": False, "pnl_pct": 0.0, "exit_price": 0.0}
-        pnl, exit_px = self._mfe_after_fill(fill_ts, fill_px, opened.direction, last_price)
+            return {"distance": distance, "filled": False, "vplus": False, "pnl_pct": 0.0, "exit_price": 0.0, "fill_ts": 0, "fill_price": 0.0}
+        pnl, exit_px, _exit_ts = self._mfe_after_fill(fill_ts, fill_px, opened.direction, last_price)
         return {
             "distance": distance,
             "filled": True,
             "vplus": pnl + 1e-12 >= self.tp_min_pct,
             "pnl_pct": round(pnl, 4),
             "exit_price": exit_px,
+            "fill_ts": fill_ts,
+            "fill_price": fill_px,
         }
 
     def _bounce_from_extreme(self, opened: _OpenShot, last_price: float) -> float:
@@ -275,9 +287,10 @@ class SymbolDetector:
 
     def _mfe_after_fill(
         self, fill_ts: int, fill_px: float, direction: str, last_price: float
-    ) -> tuple[float, float]:
+    ) -> tuple[float, float, int]:
         best_pnl = 0.0
         best_px = fill_px
+        best_ts = fill_ts
         for trade in self.trades:
             if trade.ts < fill_ts:
                 continue
@@ -285,12 +298,32 @@ class SymbolDetector:
             if pnl > best_pnl:
                 best_pnl = pnl
                 best_px = trade.price
+                best_ts = trade.ts
         if last_price > 0:
             pnl = self._pnl_pct(direction, fill_px, last_price)
             if pnl > best_pnl:
                 best_pnl = pnl
                 best_px = last_price
-        return best_pnl, best_px
+        return best_pnl, best_px, best_ts
+
+    def _path_after_fill(
+        self, fill_ts: int, fill_px: float, last_price: float, end_ts: int
+    ) -> list[list[float]]:
+        if fill_ts <= 0 or fill_px <= 0:
+            return []
+        pts: list[list[float]] = [[float(fill_ts), float(fill_px)]]
+        for trade in self.trades:
+            if trade.ts <= fill_ts:
+                continue
+            if end_ts and trade.ts > end_ts:
+                break
+            if pts[-1][0] == trade.ts:
+                pts[-1][1] = trade.price
+            else:
+                pts.append([float(trade.ts), float(trade.price)])
+        if last_price > 0 and pts[-1][1] != last_price:
+            pts.append([float(end_ts or pts[-1][0]), float(last_price)])
+        return _downsample_path(pts, 80)
 
     @staticmethod
     def _pnl_pct(direction: str, fill_px: float, exit_px: float) -> float:
@@ -342,6 +375,25 @@ class SymbolDetector:
                 ref = self.trades[0].price
             out[window_ms] = (ref, high, low, count, qvol)
         return out
+
+
+def _downsample_path(pts: list[list[float]], max_points: int) -> list[list[float]]:
+    if len(pts) <= max_points:
+        return pts
+    if max_points < 3:
+        return [pts[0], pts[-1]]
+    out = [pts[0]]
+    step = (len(pts) - 2) / (max_points - 2)
+    cursor = 0.0
+    last_idx = 0
+    for _ in range(max_points - 2):
+        cursor += step
+        idx = min(len(pts) - 2, max(1, int(round(cursor))))
+        if idx != last_idx:
+            out.append(pts[idx])
+            last_idx = idx
+    out.append(pts[-1])
+    return out
 
 
 class BtcDeltaTracker:

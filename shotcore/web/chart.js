@@ -5,6 +5,7 @@
   const MUTED = "#8b95a8";
   const TEXT = "#d7deea";
   const AMBER = "#d7a13b";
+  const PATH = "#5aa8ff";
 
   function $(id) { return document.getElementById(id); }
 
@@ -55,6 +56,161 @@
     $("chartOverlay").classList.remove("open");
   }
 
+  function orderPrice(shot) {
+    const start = Number(shot.start_price) || 0;
+    const dist = Number(shot.suggest_distance) || 0;
+    if (!start || !dist) return 0;
+    return shot.direction === "UP" ? start * (1 + dist / 100) : start * (1 - dist / 100);
+  }
+
+  function xAtTs(candles, ts, padL, slot) {
+    const n = candles.length;
+    if (!n || !ts) return padL + slot / 2;
+    function xAt(i) { return padL + slot * i + slot / 2; }
+    if (ts <= candles[0].ts) return xAt(0);
+    if (ts >= candles[n - 1].ts) return xAt(n - 1);
+    for (let i = 1; i < n; i++) {
+      if (candles[i].ts >= ts) {
+        const t0 = candles[i - 1].ts;
+        const t1 = candles[i].ts;
+        const a = t1 === t0 ? 1 : (ts - t0) / (t1 - t0);
+        return xAt(i - 1) + (xAt(i) - xAt(i - 1)) * Math.max(0, Math.min(1, a));
+      }
+    }
+    return xAt(n - 1);
+  }
+
+  function inferFillTs(candles, shot, fillPx) {
+    if (Number(shot.fill_ts) > 0) return Number(shot.fill_ts);
+    if (!fillPx) return Number(shot.peak_ts) || 0;
+    const startTs = Number(shot.start_ts) || 0;
+    for (let i = 0; i < candles.length; i++) {
+      const c = candles[i];
+      if (startTs && c.ts + 1000 < startTs) continue;
+      if (shot.direction === "UP" && c.h >= fillPx) return c.ts;
+      if (shot.direction !== "UP" && c.l <= fillPx) return c.ts;
+    }
+    return Number(shot.peak_ts) || (candles[0] && candles[0].ts) || 0;
+  }
+
+  function pathPoints(shot, candles, fillTs, fillPx) {
+    const raw = Array.isArray(shot.path) ? shot.path : [];
+    const pts = raw
+      .filter((p) => p && p.length >= 2 && Number(p[0]) >= fillTs - 5 && Number(p[1]) > 0)
+      .map((p) => [Number(p[0]), Number(p[1])]);
+    if (pts.length >= 2) return pts;
+    const out = fillTs && fillPx ? [[fillTs, fillPx]] : [];
+    candles.forEach((c) => {
+      if (c.ts + 500 < fillTs) return;
+      out.push([c.ts, c.c]);
+    });
+    const last = Number(shot.exit_price) || Number(shot.last_price) || 0;
+    if (last && out.length) out.push([out[out.length - 1][0], last]);
+    return out;
+  }
+
+  function pill(ctx, text, x, y, bg, fg) {
+    ctx.font = "bold 11px Segoe UI, sans-serif";
+    const w = ctx.measureText(text).width + 12;
+    const h = 16;
+    ctx.fillStyle = bg;
+    ctx.beginPath();
+    const r = 4;
+    ctx.moveTo(x + r, y - 11);
+    ctx.lineTo(x + w - r, y - 11);
+    ctx.quadraticCurveTo(x + w, y - 11, x + w, y - 11 + r);
+    ctx.lineTo(x + w, y - 11 + h - r);
+    ctx.quadraticCurveTo(x + w, y - 11 + h, x + w - r, y - 11 + h);
+    ctx.lineTo(x + r, y - 11 + h);
+    ctx.quadraticCurveTo(x, y - 11 + h, x, y - 11 + h - r);
+    ctx.lineTo(x, y - 11 + r);
+    ctx.quadraticCurveTo(x, y - 11, x + r, y - 11);
+    ctx.fill();
+    ctx.fillStyle = fg;
+    ctx.textAlign = "left";
+    ctx.fillText(text, x + 6, y + 1);
+    return w;
+  }
+
+  function drawOrderOverlay(ctx, g) {
+    const { candles, shot, fillPx, exitPx, startPx, padL, padT, plotW, plotH, xAt, yAt, xAtTs } = g;
+    if (!fillPx || !startPx) return;
+    const dist = Number(shot.suggest_distance) || 0;
+    const fillTs = inferFillTs(candles, shot, fillPx);
+    const yFill = yAt(fillPx);
+    const yStart = yAt(startPx);
+
+    ctx.save();
+    ctx.setLineDash([6, 4]);
+    ctx.strokeStyle = AMBER;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(padL, yFill);
+    ctx.lineTo(padL + plotW, yFill);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+
+    const label = `ордер ${fmt(dist, 2)}%  ${fmtPx(fillPx)}`;
+    const labelY = yFill < padT + 18 ? yFill + 18 : yFill - 6;
+    pill(ctx, label, padL + 8, labelY, "#d7a13bcc", "#1a1408");
+
+    const xfMark = xAtTs(fillTs);
+    const xf = Math.max(padL + 16, xfMark - 18);
+    ctx.strokeStyle = AMBER;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(xf, yStart);
+    ctx.lineTo(xf, yFill);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(xf - 5, yStart);
+    ctx.lineTo(xf + 5, yStart);
+    ctx.moveTo(xf - 5, yFill);
+    ctx.lineTo(xf + 5, yFill);
+    ctx.stroke();
+    ctx.fillStyle = AMBER;
+    ctx.font = "bold 12px Segoe UI, sans-serif";
+    ctx.textAlign = "right";
+    const distY = (yStart + yFill) / 2;
+    ctx.fillText(fmt(dist, 2) + "%", xf - 8, distY + 4);
+
+    ctx.beginPath();
+    ctx.fillStyle = AMBER;
+    ctx.arc(xfMark, yFill, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = TEXT;
+    ctx.font = "bold 10px Segoe UI, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText("вход", xfMark + 8, yFill + 4);
+
+    const pts = pathPoints(shot, candles, fillTs, fillPx);
+    if (pts.length >= 2) {
+      ctx.beginPath();
+      ctx.strokeStyle = PATH;
+      ctx.lineWidth = 2.2;
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      pts.forEach((pt, i) => {
+        const x = xAtTs(pt[0]);
+        const y = yAt(pt[1]);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      const last = pts[pts.length - 1];
+      const xLast = xAtTs(last[0]);
+      const yLast = yAt(exitPx || last[1]);
+      ctx.beginPath();
+      ctx.fillStyle = UP;
+      ctx.arc(xLast, yLast, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+      const tp = Number(shot.pnl_pct);
+      const tpText = Number.isFinite(tp) ? `TP ${tp >= 0 ? "+" : ""}${fmt(tp, 2)}%` : "выход";
+      pill(ctx, tpText, Math.min(xLast + 8, padL + plotW - 70), yLast < padT + 18 ? yLast + 16 : yLast - 6, "#4fba7acc", "#07140c");
+    }
+  }
+
   function setTitle(shot, bar) {
     const dir = shot.direction || "";
     const cls = dir === "UP" ? "up" : "down";
@@ -62,8 +218,11 @@
       `${shot.symbol || ""} <span class="${cls}">${dir} ${fmt(shot.percent || 0)}%</span>` +
       ` <span class="meta">${shot.time || ""} · свеча ${bar}</span>`;
     $("chartSub").textContent =
-      `ордер ${fmt(shot.suggest_distance || 0)}% · окно ${shot.window_ms || 0} мс` +
-      (shot.lever ? ` · x${Math.round(shot.lever)}` : "");
+      `ордер ${fmt(shot.suggest_distance || 0)}%` +
+      (shot.fill_price ? ` @ ${fmtPx(shot.fill_price)}` : "") +
+      ` · окно ${shot.window_ms || 0} мс` +
+      (shot.lever ? ` · x${Math.round(shot.lever)}` : "") +
+      (shot.pnl_pct ? ` · TP ${Number(shot.pnl_pct) >= 0 ? "+" : ""}${fmt(shot.pnl_pct, 2)}%` : "");
   }
 
   function synthetic(shot) {
@@ -93,7 +252,8 @@
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       return;
     }
-    $("chartHint").textContent = "Наведите на свечу: объём контрактов и USDT. Линейка справа — % от цены старта прострела.";
+    $("chartHint").textContent =
+      "Янтарная линия — дистанция виртуального ордера. Голубая — движение цены после входа. Наведите на свечу: объём и USDT.";
 
     const wrap = canvas.parentElement;
     const cssW = Math.max(640, wrap.clientWidth);
@@ -115,10 +275,14 @@
 
     const startPx = Number(shot.start_price) || candles[0].o;
     const extPx = Number(shot.extreme_price) || 0;
+    const fillPx = Number(shot.fill_price) || orderPrice(shot);
+    const exitPx = Number(shot.exit_price) || Number(shot.last_price) || 0;
     const highs = candles.map((c) => c.h);
     const lows = candles.map((c) => c.l);
     if (startPx) { highs.push(startPx); lows.push(startPx); }
     if (extPx) { highs.push(extPx); lows.push(extPx); }
+    if (fillPx) { highs.push(fillPx); lows.push(fillPx); }
+    if (exitPx) { highs.push(exitPx); lows.push(exitPx); }
     let pMax = Math.max.apply(null, highs);
     let pMin = Math.min.apply(null, lows);
     const pad = (pMax - pMin) * 0.12 || pMax * 0.002;
@@ -229,6 +393,12 @@
       ctx.fillText(fmt(shot.percent || Math.abs(pctOf(extPx)), 2) + "%", xr + 8, midY + 4);
     }
 
+    drawOrderOverlay(ctx, {
+      candles, shot, fillPx, exitPx, startPx,
+      padL, padT, plotW, plotH, slot, bodyW,
+      xAt, yAt, xAtTs: (ts) => xAtTs(candles, ts, padL, slot),
+    });
+
     ctx.textAlign = "left";
     ctx.font = "11px Segoe UI, sans-serif";
     for (let pct = startTick; pct <= pctMax + 1e-9; pct += step) {
@@ -237,9 +407,11 @@
       if (y < padT || y > padT + plotH) continue;
       const label = (pct >= 0 ? "+" : "") + fmt(pct, step < 0.5 ? 2 : 1) + "%";
       const nearShot = extPx && Math.abs(pct - pctOf(extPx)) < step * 0.35;
-      ctx.fillStyle = nearShot ? shotColor : MUTED;
+      const orderPct = fillPx && startPx ? (fillPx - startPx) / startPx * 100 : null;
+      const nearOrder = orderPct != null && Math.abs(pct - orderPct) < step * 0.35;
+      ctx.fillStyle = nearOrder ? AMBER : (nearShot ? shotColor : MUTED);
       ctx.fillText(label, padL + plotW + 8, y + 4);
-      ctx.strokeStyle = nearShot ? shotColor : GRID;
+      ctx.strokeStyle = nearOrder ? AMBER : (nearShot ? shotColor : GRID);
       ctx.beginPath();
       ctx.moveTo(padL + plotW, y);
       ctx.lineTo(padL + plotW + 6, y);

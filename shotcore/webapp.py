@@ -174,6 +174,8 @@ async def _chart(request: web.Request) -> web.Response:
             except Exception:
                 bar, candles = "1s", []
         payload = {"bar": bar, "candles": candles, "shot": shot}
+        if shot_row:
+            payload["shot"]["path"] = shot_row.get("path") or []
         if candles:
             _chart_cache[key] = (time.monotonic(), payload)
             if len(_chart_cache) > _CHART_MAX:

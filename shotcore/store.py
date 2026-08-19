@@ -153,14 +153,32 @@ class ShotStore:
             "suggest_distance": event.suggest_distance,
             "distance_report": json.dumps(event.distance_report, ensure_ascii=False),
             "lever": event.lever,
+            "fill_ts": event.fill_ts,
+            "fill_price": event.fill_price,
+            "start_ts": event.start_ts,
+            "path": event.path,
         }
         stored = _row_to_event(row)
         if stored:
             self.events.append(stored)
         with self.csv_path.open("a", newline="", encoding="utf-8") as fh:
-            csv.DictWriter(fh, fieldnames=CSV_FIELDS).writerow(row)
+            csv.DictWriter(fh, fieldnames=CSV_FIELDS, extrasaction="ignore").writerow(row)
         with self.jsonl_path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps({**row, "btc_calm": bool(event.btc_calm), "vplus": bool(event.vplus)}, ensure_ascii=False) + "\n")
+            fh.write(
+                json.dumps(
+                    {
+                        **{k: row[k] for k in CSV_FIELDS},
+                        "btc_calm": bool(event.btc_calm),
+                        "vplus": bool(event.vplus),
+                        "fill_ts": event.fill_ts,
+                        "fill_price": event.fill_price,
+                        "start_ts": event.start_ts,
+                        "path": event.path,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
         self.total += 1
         log.info(
             "SHOT %s %s x%.0f %.2f%% dist=%.2f pnl=%.3f%% hold=%sms",
@@ -333,10 +351,19 @@ class ShotStore:
         tmp_csv.replace(self.csv_path)
         tmp_jsonl = self.jsonl_path.with_suffix(".jsonl.tmp")
         with tmp_jsonl.open("w", encoding="utf-8") as fh:
-            for row in rows:
+            for item in self.events:
+                row = _event_to_row(item)
                 fh.write(
                     json.dumps(
-                        {**row, "btc_calm": bool(int(row["btc_calm"])), "vplus": bool(int(row["vplus"]))},
+                        {
+                            **row,
+                            "btc_calm": bool(item.get("btc_calm")),
+                            "vplus": bool(item.get("vplus")),
+                            "fill_ts": int(item.get("fill_ts") or 0),
+                            "fill_price": float(item.get("fill_price") or 0),
+                            "start_ts": int(item.get("start_ts") or 0),
+                            "path": item.get("path") or [],
+                        },
                         ensure_ascii=False,
                     )
                     + "\n"
@@ -426,7 +453,28 @@ def _fmt_local(ts_ms: int, tz: ZoneInfo) -> str:
     return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).astimezone(tz).strftime("%d.%m %H:%M:%S")
 
 
+def _fill_meta(item: dict[str, Any]) -> tuple[int, float]:
+    dist = float(item.get("suggest_distance") or 0)
+    start = float(item.get("start_price") or 0)
+    direction = str(item.get("direction") or "").upper()
+    fill_price = float(item.get("fill_price") or 0)
+    fill_ts = int(item.get("fill_ts") or 0)
+    if fill_price <= 0 and start > 0 and dist > 0:
+        fill_price = start * (1.0 - dist / 100.0) if direction == "DOWN" else start * (1.0 + dist / 100.0)
+    if fill_ts <= 0 or fill_price <= 0:
+        for row in item.get("distance_report") or []:
+            if abs(float(row.get("distance") or 0) - dist) > 1e-6:
+                continue
+            if not fill_ts:
+                fill_ts = int(row.get("fill_ts") or 0)
+            if fill_price <= 0 and float(row.get("fill_price") or 0) > 0:
+                fill_price = float(row["fill_price"])
+            break
+    return fill_ts, fill_price
+
+
 def _public_event(item: dict[str, Any], tz: ZoneInfo) -> dict[str, Any]:
+    fill_ts, fill_price = _fill_meta(item)
     return {
         "time": _fmt_local(item["peak_ts"], tz),
         "symbol": item["symbol"],
@@ -440,9 +488,13 @@ def _public_event(item: dict[str, Any], tz: ZoneInfo) -> dict[str, Any]:
         "rollback_pct": item["rollback_pct"],
         "lever": item.get("lever") or 0,
         "peak_ts": item["peak_ts"],
+        "start_ts": int(item.get("start_ts") or 0),
         "start_price": float(item.get("start_price") or 0),
         "extreme_price": float(item.get("extreme_price") or 0),
         "last_price": float(item.get("last_price") or 0),
+        "exit_price": float(item.get("exit_price") or 0),
+        "fill_ts": fill_ts,
+        "fill_price": fill_price,
         "quote_volume": float(item.get("quote_volume") or 0),
         "duration_ms": int(item.get("duration_ms") or 0),
         "hold_ms": int(item.get("hold_ms") or 300),
@@ -485,6 +537,11 @@ def _row_to_event(row: dict[str, Any]) -> dict[str, Any] | None:
             "last_price": float(row.get("last_price") or 0),
             "quote_volume": float(row.get("quote_volume") or 0),
             "duration_ms": int(float(row.get("duration_ms") or 0)),
+            "start_ts": int(float(row.get("start_ts") or 0)),
+            "exit_price": float(row.get("exit_price") or 0),
+            "fill_ts": int(float(row.get("fill_ts") or 0)),
+            "fill_price": float(row.get("fill_price") or 0),
+            "path": _as_path(row.get("path")),
         }
     except (TypeError, ValueError):
         return None
@@ -494,6 +551,27 @@ def _as_bool(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip() in {"1", "true", "True"}
     return bool(value)
+
+
+def _as_path(value: Any) -> list[list[float]]:
+    if isinstance(value, str) and value:
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(value, list):
+        return []
+    out: list[list[float]] = []
+    for pt in value:
+        if not isinstance(pt, (list, tuple)) or len(pt) < 2:
+            continue
+        try:
+            ts, px = float(pt[0]), float(pt[1])
+        except (TypeError, ValueError):
+            continue
+        if ts > 0 and px > 0:
+            out.append([ts, px])
+    return out
 
 
 def _parse_ts(value: str) -> int:
