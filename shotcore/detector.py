@@ -296,9 +296,10 @@ class SymbolDetector:
         return best_pnl, best_px, best_ts
 
     def _tick_tape(self, start_ts: int, end_ts: int) -> list[list[float]]:
-        pad = 1500
-        lo = start_ts - pad
-        hi = end_ts + pad
+        pad_before = 1500
+        pad_after = 2000
+        lo = start_ts - pad_before
+        hi = end_ts + pad_after
         out: list[list[float]] = []
         for trade in self.trades:
             if trade.ts < lo:
@@ -306,8 +307,13 @@ class SymbolDetector:
             if trade.ts > hi:
                 break
             side = 1.0 if str(trade.side).lower() in {"buy", "b"} else -1.0
-            out.append([float(trade.ts), float(trade.price), side])
-        return _downsample_path(out, 240)
+            out.append([float(trade.ts), float(trade.price), side, float(trade.qty)])
+        if len(out) > 2500:
+            step = len(out) / 2500
+            keep = [out[int(i * step)] for i in range(2500)]
+            keep[-1] = out[-1]
+            return keep
+        return out
 
     def _path_after_fill(
         self, fill_ts: int, fill_px: float, last_price: float, end_ts: int

@@ -173,10 +173,10 @@ async def _chart(request: web.Request) -> web.Response:
                 bar, candles = await rest.fetch_candles_around(symbol, ts)
             except Exception:
                 bar, candles = "1s", []
-        payload = {"bar": bar, "candles": candles, "shot": shot}
+        payload = {"bar": "tick", "candles": candles, "shot": shot}
         if shot_row:
             payload["shot"]["path"] = shot_row.get("path") or []
-        if candles:
+        if candles or payload["shot"].get("path"):
             _chart_cache[key] = (time.monotonic(), payload)
             if len(_chart_cache) > _CHART_MAX:
                 oldest = sorted(_chart_cache.items(), key=lambda item: item[1][0])[: len(_chart_cache) - _CHART_MAX]

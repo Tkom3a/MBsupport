@@ -4,27 +4,12 @@
   const GRID = "#243044";
   const MUTED = "#8b95a8";
   const TEXT = "#d7deea";
-  const AMBER = "#d7a13b";
-  const PATH = "#5aa8ff";
+  const BLUE = "#5aa8ff";
+  const PURPLE = "rgba(128, 90, 196, 0.18)";
+  const PURPLE_LINE = "rgba(190, 160, 230, 0.85)";
 
   function $(id) { return document.getElementById(id); }
-
   function fmt(n, d) { return Number(n).toFixed(d == null ? 2 : d); }
-
-  function fmtMoney(n) {
-    const v = Number(n) || 0;
-    if (v >= 1e6) return fmt(v / 1e6, 2) + "M USDT";
-    if (v >= 1e3) return fmt(v / 1e3, 1) + "k USDT";
-    if (v > 0) return fmt(v, 0) + " USDT";
-    return "—";
-  }
-
-  function fmtVol(n) {
-    const v = Number(n) || 0;
-    if (v >= 1e6) return fmt(v / 1e6, 2) + "M";
-    if (v >= 1e3) return fmt(v / 1e3, 1) + "k";
-    return fmt(v, v >= 10 ? 0 : 2);
-  }
 
   function fmtPx(n) {
     const v = Number(n);
@@ -34,10 +19,86 @@
     return fmt(v, 6);
   }
 
+  function fmtVol(n) {
+    const v = Number(n) || 0;
+    if (v >= 1e6) return fmt(v / 1e6, 2) + "M";
+    if (v >= 1e3) return fmt(v / 1e3, 1) + "k";
+    return fmt(v, v >= 10 ? 0 : 2);
+  }
+
   function fmtTime(ts) {
     const d = new Date(ts);
     const p = (x) => String(x).padStart(2, "0");
     return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+  }
+
+  function ticksFromShot(shot, candles) {
+    const raw = Array.isArray(shot.path) ? shot.path : [];
+    const ticks = raw
+      .filter((p) => p && p.length >= 2 && Number(p[0]) > 0 && Number(p[1]) > 0)
+      .map((p) => ({
+        ts: Number(p[0]),
+        price: Number(p[1]),
+        side: p.length > 2 ? Number(p[2]) : 0,
+        qty: p.length > 3 ? Number(p[3]) : 0,
+      }));
+    if (ticks.length) return ticks;
+    const fake = [];
+    (candles || []).forEach((c) => {
+      fake.push({ ts: c.ts, price: c.o, side: -1, qty: 0 });
+      fake.push({ ts: c.ts + 200, price: c.h, side: 1, qty: 0 });
+      fake.push({ ts: c.ts + 400, price: c.l, side: -1, qty: 0 });
+      fake.push({ ts: c.ts + 700, price: c.c, side: c.c >= c.o ? 1 : -1, qty: c.vol || 0 });
+    });
+    return fake;
+  }
+
+  function orderPrice(shot) {
+    const start = Number(shot.start_price) || 0;
+    const dist = Number(shot.suggest_distance) || 0;
+    if (Number(shot.fill_price) > 0) return Number(shot.fill_price);
+    if (!start || !dist) return 0;
+    return shot.direction === "UP" ? start * (1 + dist / 100) : start * (1 - dist / 100);
+  }
+
+  function fillTsOf(shot, ticks, fillPx) {
+    if (Number(shot.fill_ts) > 0) return Number(shot.fill_ts);
+    const startTs = Number(shot.start_ts) || 0;
+    for (let i = 0; i < ticks.length; i++) {
+      const t = ticks[i];
+      if (startTs && t.ts < startTs) continue;
+      if (shot.direction === "UP" && t.price >= fillPx) return t.ts;
+      if (shot.direction !== "UP" && t.price <= fillPx) return t.ts;
+    }
+    return Number(shot.peak_ts) || (ticks[0] && ticks[0].ts) || 0;
+  }
+
+  function priceAt(ticks, ts, fallback) {
+    let chosen = fallback;
+    for (let i = 0; i < ticks.length; i++) {
+      if (ticks[i].ts <= ts) chosen = ticks[i].price;
+      else return chosen;
+    }
+    return chosen;
+  }
+
+  function triangle(ctx, x, y, up, color) {
+    ctx.beginPath();
+    ctx.fillStyle = color;
+    if (up) {
+      ctx.moveTo(x, y - 9);
+      ctx.lineTo(x - 6, y + 5);
+      ctx.lineTo(x + 6, y + 5);
+    } else {
+      ctx.moveTo(x, y + 9);
+      ctx.lineTo(x - 6, y - 5);
+      ctx.lineTo(x + 6, y - 5);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = "#0b0d12";
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
   }
 
   function niceStep(range) {
@@ -48,281 +109,53 @@
     return Math.ceil(range / 6);
   }
 
-  function openOverlay() {
-    $("chartOverlay").classList.add("open");
-  }
-
-  function closeOverlay() {
-    $("chartOverlay").classList.remove("open");
-  }
-
-  function ticksFromShot(shot) {
-    const raw = Array.isArray(shot.path) ? shot.path : [];
-    return raw
-      .filter((p) => p && p.length >= 2 && Number(p[0]) > 0 && Number(p[1]) > 0)
-      .map((p) => ({
-        ts: Number(p[0]),
-        price: Number(p[1]),
-        side: p.length > 2 ? Number(p[2]) : 0,
-      }));
-  }
-
-  function xByTime(ts, t0, t1, padL, plotW) {
-    if (t1 <= t0) return padL + plotW / 2;
-    return padL + (ts - t0) / (t1 - t0) * plotW;
-  }
-
-  function orderPrice(shot) {
-    const start = Number(shot.start_price) || 0;
-    const dist = Number(shot.suggest_distance) || 0;
-    if (!start || !dist) return 0;
-    return shot.direction === "UP" ? start * (1 + dist / 100) : start * (1 - dist / 100);
-  }
-
-  function xAtTs(candles, ts, padL, slot) {
-    const n = candles.length;
-    if (!n || !ts) return padL + slot / 2;
-    function xAt(i) { return padL + slot * i + slot / 2; }
-    if (ts <= candles[0].ts) return xAt(0);
-    if (ts >= candles[n - 1].ts) return xAt(n - 1);
-    for (let i = 1; i < n; i++) {
-      if (candles[i].ts >= ts) {
-        const t0 = candles[i - 1].ts;
-        const t1 = candles[i].ts;
-        const a = t1 === t0 ? 1 : (ts - t0) / (t1 - t0);
-        return xAt(i - 1) + (xAt(i) - xAt(i - 1)) * Math.max(0, Math.min(1, a));
-      }
-    }
-    return xAt(n - 1);
-  }
-
-  function inferFillTs(candles, shot, fillPx) {
-    if (Number(shot.fill_ts) > 0) return Number(shot.fill_ts);
-    if (!fillPx) return Number(shot.peak_ts) || 0;
-    const startTs = Number(shot.start_ts) || 0;
-    for (let i = 0; i < candles.length; i++) {
-      const c = candles[i];
-      if (startTs && c.ts + 1000 < startTs) continue;
-      if (shot.direction === "UP" && c.h >= fillPx) return c.ts;
-      if (shot.direction !== "UP" && c.l <= fillPx) return c.ts;
-    }
-    return Number(shot.peak_ts) || (candles[0] && candles[0].ts) || 0;
-  }
-
-  function pathPoints(shot, candles, fillTs, fillPx, untilTs) {
-    const raw = Array.isArray(shot.path) ? shot.path : [];
-    const end = untilTs || fillTs;
-    const pts = raw
-      .filter((p) => p && p.length >= 2 && Number(p[0]) >= fillTs - 5 && Number(p[0]) <= end + 5 && Number(p[1]) > 0)
-      .map((p) => [Number(p[0]), Number(p[1])]);
-    if (pts.length >= 2) {
-      if (pts[pts.length - 1][0] < end) {
-        pts.push([end, priceAtTs(candles, end, pts[pts.length - 1][1])]);
-      }
-      return pts;
-    }
-    const out = fillTs && fillPx ? [[fillTs, fillPx]] : [];
-    candles.forEach((c) => {
-      if (c.ts + 20 < fillTs || c.ts > end) return;
-      out.push([Math.min(c.ts, end), c.c]);
-    });
-    const lastPx = priceAtTs(candles, end, Number(shot.last_price) || fillPx);
-    if (lastPx && out.length) out.push([end, lastPx]);
-    return out;
-  }
-
-  function priceAtTs(candles, ts, fallback) {
-    let chosen = fallback;
-    for (let i = 0; i < candles.length; i++) {
-      if (candles[i].ts <= ts) chosen = candles[i].c;
-      else return chosen;
-    }
-    return chosen;
-  }
-
-  function pill(ctx, text, x, y, bg, fg) {
-    ctx.font = "bold 11px Segoe UI, sans-serif";
-    const w = ctx.measureText(text).width + 12;
-    const h = 16;
-    ctx.fillStyle = bg;
-    ctx.beginPath();
-    const r = 4;
-    ctx.moveTo(x + r, y - 11);
-    ctx.lineTo(x + w - r, y - 11);
-    ctx.quadraticCurveTo(x + w, y - 11, x + w, y - 11 + r);
-    ctx.lineTo(x + w, y - 11 + h - r);
-    ctx.quadraticCurveTo(x + w, y - 11 + h, x + w - r, y - 11 + h);
-    ctx.lineTo(x + r, y - 11 + h);
-    ctx.quadraticCurveTo(x, y - 11 + h, x, y - 11 + h - r);
-    ctx.lineTo(x, y - 11 + r);
-    ctx.quadraticCurveTo(x, y - 11, x + r, y - 11);
-    ctx.fill();
-    ctx.fillStyle = fg;
-    ctx.textAlign = "left";
-    ctx.fillText(text, x + 6, y + 1);
-    return w;
-  }
-
-  function drawOrderOverlay(ctx, g) {
-    const { candles, shot, fillPx, startPx, padL, padT, plotW, yAt, xAtTs } = g;
-    if (!fillPx || !startPx) return;
-    const dist = Number(shot.suggest_distance) || 0;
-    const holdMs = Math.max(50, Number(shot.hold_ms) || 300);
-    const fillTs = inferFillTs(candles, shot, fillPx);
-    const closeTs = fillTs + holdMs;
-    const yFill = yAt(fillPx);
-    const yStart = yAt(startPx);
-    const x0 = xAtTs(fillTs);
-    let x1 = xAtTs(closeTs);
-    if (x1 < x0 + 4) x1 = x0 + 4;
-    if (x1 > padL + plotW) x1 = padL + plotW;
-
-    ctx.save();
-    ctx.fillStyle = "rgba(215,161,59,0.20)";
-    const bandTop = Math.min(yStart, yFill);
-    ctx.fillRect(x0, bandTop, Math.max(4, x1 - x0), Math.max(2, Math.abs(yFill - yStart)));
-    ctx.strokeStyle = AMBER;
-    ctx.lineWidth = 2.4;
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(x0, yFill);
-    ctx.lineTo(x1, yFill);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(x0, yFill - 5);
-    ctx.lineTo(x0, yFill + 5);
-    ctx.moveTo(x1, yFill - 5);
-    ctx.lineTo(x1, yFill + 5);
-    ctx.stroke();
-    ctx.restore();
-
-    const holdLabel = holdMs >= 1000 ? (holdMs / 1000) + "с" : holdMs + " мс";
-    const label = `ордер ${fmt(dist, 2)}% · ${holdLabel}`;
-    const labelX = Math.min(Math.max(padL + 4, x0), padL + plotW - 130);
-    const labelY = yFill < padT + 18 ? yFill + 18 : yFill - 6;
-    pill(ctx, label, labelX, labelY, "#d7a13bcc", "#1a1408");
-
-    const xf = Math.max(padL + 16, x0 - 18);
-    ctx.strokeStyle = AMBER;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(xf, yStart);
-    ctx.lineTo(xf, yFill);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(xf - 5, yStart);
-    ctx.lineTo(xf + 5, yStart);
-    ctx.moveTo(xf - 5, yFill);
-    ctx.lineTo(xf + 5, yFill);
-    ctx.stroke();
-    ctx.fillStyle = AMBER;
-    ctx.font = "bold 12px Segoe UI, sans-serif";
-    ctx.textAlign = "right";
-    ctx.fillText(fmt(dist, 2) + "%", xf - 8, (yStart + yFill) / 2 + 4);
-
-    ctx.beginPath();
-    ctx.fillStyle = AMBER;
-    ctx.arc(x0, yFill, 4.5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = TEXT;
-    ctx.font = "bold 10px Segoe UI, sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText("вход", x0 + 8, yFill + (yFill < padT + 28 ? 14 : -8));
-
-    const pts = pathPoints(shot, candles, fillTs, fillPx, closeTs);
-    if (pts.length >= 2) {
-      ctx.beginPath();
-      ctx.strokeStyle = PATH;
-      ctx.lineWidth = 2.2;
-      ctx.lineJoin = "round";
-      ctx.lineCap = "round";
-      pts.forEach((pt, i) => {
-        const x = Math.min(xAtTs(pt[0]), x1);
-        const y = yAt(pt[1]);
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      });
-      ctx.stroke();
-      const closePx = priceAtTs(candles, closeTs, pts[pts.length - 1][1]);
-      ctx.beginPath();
-      ctx.fillStyle = UP;
-      ctx.arc(x1, yAt(closePx), 4.5, 0, Math.PI * 2);
-      ctx.fill();
-      pill(
-        ctx,
-        "выход " + holdLabel,
-        Math.min(x1 + 8, padL + plotW - 78),
-        yAt(closePx) < padT + 18 ? yAt(closePx) + 16 : yAt(closePx) - 6,
-        "#4fba7acc",
-        "#07140c"
-      );
-    }
-  }
-
-  function setTitle(shot, bar) {
-    const dir = shot.direction || "";
-    const cls = dir === "UP" ? "up" : "down";
-    $("chartTitle").innerHTML =
-      `${shot.symbol || ""} <span class="${cls}">${dir} ${fmt(shot.percent || 0)}%</span>` +
-      ` <span class="meta">${shot.time || ""} · свеча ${bar}</span>`;
-    $("chartSub").textContent =
-      `ордер ${fmt(shot.suggest_distance || 0)}%` +
-      (shot.fill_price ? ` @ ${fmtPx(shot.fill_price)}` : "") +
-      ` · окно ${shot.window_ms || 0} мс` +
-      (shot.lever ? ` · x${Math.round(shot.lever)}` : "") +
-      (shot.pnl_pct ? ` · TP ${Number(shot.pnl_pct) >= 0 ? "+" : ""}${fmt(shot.pnl_pct, 2)}%` : "");
-  }
-
-  function synthetic(shot) {
-    const start = Number(shot.start_price) || 0;
-    const ext = Number(shot.extreme_price) || start;
-    if (!start) return [];
-    const ts = Number(shot.peak_ts) || Date.now();
-    return [{
-      ts,
-      o: start,
-      h: Math.max(start, ext),
-      l: Math.min(start, ext),
-      c: ext,
-      vol: 0,
-      vol_quote: Number(shot.quote_volume) || 0,
-    }];
-  }
-
-  function drawTickChart(canvas, shot, ticks, cssW, cssH, dpr) {
+  function drawMtChart(canvas, shot, ticks, cssW, cssH, dpr) {
     const ctx = canvas.getContext("2d");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const padL = 72, padR = 70, padT = 22, padB = 22;
+    const padL = 78, padR = 72, padT = 16, padB = 24;
     const plotW = cssW - padL - padR;
     const plotH = cssH - padT - padB;
+
     const startPx = Number(shot.start_price) || ticks[0].price;
-    const extPx = Number(shot.extreme_price) || 0;
-    const fillPx = Number(shot.fill_price) || orderPrice(shot);
+    const extPx = Number(shot.extreme_price) || ticks[ticks.length - 1].price;
+    const fillPx = orderPrice(shot);
     const holdMs = Math.max(50, Number(shot.hold_ms) || 300);
     const startTs = Number(shot.start_ts) || ticks[0].ts;
-    const peakTs = Number(shot.peak_ts) || ticks[ticks.length - 1].ts;
-    const fillTs = Number(shot.fill_ts) || inferFillTs(
-      ticks.map((t) => ({ ts: t.ts, h: t.price, l: t.price, o: t.price, c: t.price })),
-      shot,
-      fillPx
-    );
-    const t0 = ticks[0].ts;
-    const t1 = ticks[ticks.length - 1].ts;
-    const prices = ticks.map((t) => t.price);
+    const peakTs = Number(shot.peak_ts) || startTs;
+    const fillTs = fillTsOf(shot, ticks, fillPx);
+    const closeTs = fillTs + holdMs;
+    const closePx = Number(shot.exit_price) || priceAt(ticks, closeTs, fillPx);
+
+    const sel0 = startTs;
+    const sel1 = startTs + 1000;
+    const view0 = sel0 - 700;
+    const view1 = Math.max(sel1, closeTs) + 900;
+    const t0 = view0;
+    const t1 = view1;
+
+    const visible = ticks.filter((t) => t.ts >= view0 - 50 && t.ts <= view1 + 50);
+    const use = visible.length ? visible : ticks;
+    const prices = use.map((t) => t.price);
     if (startPx) prices.push(startPx);
     if (extPx) prices.push(extPx);
     if (fillPx) prices.push(fillPx);
+    if (closePx) prices.push(closePx);
     let pMax = Math.max.apply(null, prices);
     let pMin = Math.min.apply(null, prices);
-    const pad = (pMax - pMin) * 0.14 || pMax * 0.002;
+    const pad = (pMax - pMin) * 0.16 || pMax * 0.002;
     pMax += pad;
     pMin -= pad;
+
+    function xAt(ts) {
+      if (t1 <= t0) return padL + plotW / 2;
+      return padL + (ts - t0) / (t1 - t0) * plotW;
+    }
     function yAt(p) { return padT + (pMax - p) / (pMax - pMin) * plotH; }
-    function xAt(ts) { return xByTime(ts, t0, t1, padL, plotW); }
     function pctOf(p) { return startPx ? (p - startPx) / startPx * 100 : 0; }
 
     ctx.fillStyle = "#10141c";
     ctx.fillRect(0, 0, cssW, cssH);
+
     ctx.strokeStyle = GRID;
     ctx.lineWidth = 1;
     const pctMin = pctOf(pMin);
@@ -342,105 +175,152 @@
       ctx.textAlign = "right";
       ctx.fillText(fmtPx(price), padL - 8, y + 4);
       ctx.textAlign = "left";
+      const nearFill = fillPx && Math.abs(pct - pctOf(fillPx)) < step * 0.35;
+      ctx.fillStyle = nearFill ? UP : MUTED;
       ctx.fillText((pct >= 0 ? "+" : "") + fmt(pct, step < 0.5 ? 2 : 1) + "%", padL + plotW + 8, y + 4);
     }
 
-    const xSel0 = xAt(startTs);
-    const xSel1 = xAt(Math.max(peakTs, startTs + (Number(shot.window_ms) || 600)));
-    ctx.fillStyle = "rgba(120, 80, 200, 0.16)";
-    ctx.fillRect(xSel0, padT, Math.max(6, xSel1 - xSel0), plotH);
-    ctx.strokeStyle = "rgba(160, 120, 220, 0.7)";
-    ctx.strokeRect(xSel0, padT, Math.max(6, xSel1 - xSel0), plotH);
+    const xSel0 = xAt(sel0);
+    const xSel1 = xAt(sel1);
+    const yTop = yAt(startPx);
+    const yBot = yAt(extPx);
+    ctx.fillStyle = PURPLE;
+    ctx.fillRect(xSel0, padT, Math.max(8, xSel1 - xSel0), plotH);
+    ctx.strokeStyle = PURPLE_LINE;
+    ctx.lineWidth = 1.4;
+    ctx.strokeRect(xSel0, padT, Math.max(8, xSel1 - xSel0), plotH);
 
     ctx.beginPath();
-    ctx.strokeStyle = "#c5c0d8";
+    ctx.strokeStyle = "#efe8ff";
     ctx.lineWidth = 1.2;
-    ticks.forEach((t, i) => {
-      const x = xAt(t.ts);
-      const y = yAt(t.price);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
+    ctx.setLineDash([4, 3]);
+    ctx.moveTo(xSel0, yTop);
+    ctx.lineTo(xSel1, yBot);
     ctx.stroke();
-    ticks.forEach((t) => {
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#efe8ff";
+    ctx.beginPath(); ctx.arc(xSel0, yTop, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(xSel1, yBot, 4, 0, Math.PI * 2); ctx.fill();
+
+    use.forEach((t) => {
       ctx.beginPath();
       ctx.fillStyle = t.side > 0 ? UP : DOWN;
-      ctx.arc(xAt(t.ts), yAt(t.price), 2.4, 0, Math.PI * 2);
+      ctx.arc(xAt(t.ts), yAt(t.price), 2.2, 0, Math.PI * 2);
       ctx.fill();
     });
 
-    if (startPx) {
-      const y = yAt(startPx);
-      ctx.setLineDash([4, 4]);
-      ctx.strokeStyle = MUTED;
+    if (fillPx) {
+      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = UP;
+      ctx.lineWidth = 1.4;
       ctx.beginPath();
-      ctx.moveTo(padL, y);
-      ctx.lineTo(padL + plotW, y);
+      ctx.moveTo(padL, yAt(fillPx));
+      ctx.lineTo(padL + plotW, yAt(fillPx));
       ctx.stroke();
       ctx.setLineDash([]);
+      ctx.fillStyle = UP;
+      ctx.font = "bold 11px Segoe UI, sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillText("ордер " + fmt(shot.suggest_distance || 0, 2) + "%", padL + 8, yAt(fillPx) - 8);
     }
 
     if (fillPx && fillTs) {
-      const x0 = xAt(fillTs);
-      let x1 = xAt(fillTs + holdMs);
-      if (x1 < x0 + 4) x1 = x0 + 4;
-      ctx.strokeStyle = AMBER;
-      ctx.lineWidth = 2.4;
-      ctx.lineCap = "round";
+      const xOpen = xAt(fillTs);
+      const xClose = xAt(closeTs);
+      const yOpen = yAt(fillPx);
+      const yClose = yAt(closePx);
+      ctx.strokeStyle = "rgba(90, 168, 255, 0.85)";
+      ctx.lineWidth = 1.4;
       ctx.beginPath();
-      ctx.moveTo(x0, yAt(fillPx));
-      ctx.lineTo(x1, yAt(fillPx));
+      ctx.moveTo(xOpen, yOpen);
+      ctx.lineTo(xClose, yClose);
       ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(x0, yAt(fillPx), 4, 0, Math.PI * 2);
-      ctx.fillStyle = AMBER;
-      ctx.fill();
-      const dist = Number(shot.suggest_distance) || 0;
-      pill(ctx, `ордер ${fmt(dist, 2)}% · ${holdMs} мс`, Math.min(x0, padL + plotW - 140), yAt(fillPx) - 8, "#d7a13bcc", "#1a1408");
+      const openUp = shot.direction !== "UP";
+      triangle(ctx, xOpen, yOpen, openUp, UP);
+      triangle(ctx, xClose, yClose, !openUp, BLUE);
     }
 
-    const dur = Math.max(1, peakTs - startTs);
-    const chg = startPx && extPx ? (extPx - startPx) / startPx * 100 : Number(shot.percent || 0) * (shot.direction === "UP" ? 1 : -1);
-    const boxX = Math.min(xSel0 + 8, padL + plotW - 210);
-    const boxY = padT + plotH - 78;
-    ctx.fillStyle = "rgba(70, 40, 120, 0.88)";
-    ctx.fillRect(boxX, boxY, 200, 70);
-    ctx.fillStyle = TEXT;
-    ctx.font = "11px Segoe UI, sans-serif";
+    const inside = ticks.filter((t) => t.ts >= sel0 && t.ts <= sel1);
+    let buyQty = 0, sellQty = 0;
+    inside.forEach((t) => {
+      const q = t.qty || 0;
+      if (t.side > 0) buyQty += q;
+      else sellQty += q;
+    });
+    const firstIn = inside[0] ? inside[0].price : startPx;
+    const lastIn = inside.length ? inside[inside.length - 1].price : extPx;
+    const extremeIn = shot.direction === "UP"
+      ? Math.max.apply(null, inside.map((t) => t.price).concat([firstIn]))
+      : Math.min.apply(null, inside.map((t) => t.price).concat([firstIn]));
+    const dAbs = extremeIn - firstIn;
+    const dPct = firstIn ? dAbs / firstIn * 100 : 0;
+    const boxW = 228;
+    const boxH = 118;
+    let boxX = xSel0 + 10;
+    if (boxX + boxW > padL + plotW - 8) boxX = padL + plotW - boxW - 8;
+    const boxY = padT + plotH - boxH - 8;
+    ctx.fillStyle = "rgba(62, 42, 110, 0.92)";
+    ctx.strokeStyle = PURPLE_LINE;
+    ctx.lineWidth = 1;
+    ctx.fillRect(boxX, boxY, boxW, boxH);
+    ctx.strokeRect(boxX, boxY, boxW, boxH);
+    ctx.font = "12px Segoe UI, sans-serif";
     ctx.textAlign = "left";
-    ctx.fillText("Время: " + (dur >= 1000 ? fmt(dur / 1000, 2) + " с" : dur + " мс"), boxX + 10, boxY + 16);
-    ctx.fillText("Исходная: " + fmtPx(startPx), boxX + 10, boxY + 34);
-    ctx.fillStyle = chg >= 0 ? UP : DOWN;
-    ctx.fillText("Изменение: " + (chg >= 0 ? "+" : "") + fmt(chg, 2) + "%", boxX + 10, boxY + 52);
+    const lines = [
+      ["Время", "1 сек  ·  " + inside.length + " тик."],
+      ["Исходная цена", fmtPx(firstIn)],
+      ["Изменение цены", (dPct >= 0 ? "+" : "") + fmt(dPct, 2) + "%"],
+      ["Объём покупок", fmtVol(buyQty) || "—"],
+      ["Объём продаж", fmtVol(sellQty) || "—"],
+      ["Общий объём", fmtVol(buyQty + sellQty) || "—"],
+    ];
+    lines.forEach((row, i) => {
+      ctx.fillStyle = MUTED;
+      ctx.fillText(row[0], boxX + 10, boxY + 18 + i * 16);
+      ctx.fillStyle = i === 2 ? (dPct >= 0 ? UP : DOWN) : TEXT;
+      ctx.fillText(row[1], boxX + 118, boxY + 18 + i * 16);
+    });
 
     ctx.fillStyle = MUTED;
     ctx.font = "10px Segoe UI, sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText(fmtTime(t0), xAt(t0), cssH - 6);
-    ctx.fillText(fmtTime(peakTs), xAt(peakTs), cssH - 6);
-    ctx.fillText(fmtTime(t1), xAt(t1), cssH - 6);
+    const marks = [t0, sel0, sel1, t1];
+    marks.forEach((ts) => ctx.fillText(fmtTime(ts), xAt(ts), cssH - 6));
 
     canvas.onmousemove = function (ev) {
       const rect = canvas.getBoundingClientRect();
       const x = ev.clientX - rect.left;
-      let best = ticks[0];
+      let best = use[0];
       let bestD = 1e9;
-      ticks.forEach((t) => {
+      use.forEach((t) => {
         const d = Math.abs(xAt(t.ts) - x);
         if (d < bestD) { bestD = d; best = t; }
       });
-      const dp = pctOf(best.price);
+      if (!best) return;
       $("chartHint").textContent =
-        `${fmtTime(best.ts)}  ${fmtPx(best.price)}  ${best.side > 0 ? "buy" : "sell"}  ` +
-        `${dp >= 0 ? "+" : ""}${fmt(dp, 2)}% от исходной`;
+        `${fmtTime(best.ts)}  ${fmtPx(best.price)}  ${best.side > 0 ? "buy" : "sell"}` +
+        (best.qty ? `  qty ${fmtVol(best.qty)}` : "") +
+        `  ·  в рамке 1с: ${inside.length} тик.`;
     };
+  }
+
+  function setTitle(shot) {
+    const dir = shot.direction || "";
+    const cls = dir === "UP" ? "up" : "down";
+    $("chartTitle").innerHTML =
+      `${shot.symbol || ""} <span class="${cls}">${dir} ${fmt(shot.percent || 0)}%</span>` +
+      ` <span class="meta">${shot.time || ""} · тики</span>`;
+    $("chartSub").textContent =
+      `рамка 1 с  ·  ордер ${fmt(shot.suggest_distance || 0)}%` +
+      (shot.fill_price ? ` @ ${fmtPx(shot.fill_price)}` : "") +
+      `  ·  выход ${shot.hold_ms || 300} мс` +
+      (shot.lever ? `  ·  x${Math.round(shot.lever)}` : "");
   }
 
   function drawChart(payload) {
     const canvas = $("chartCanvas");
     const shot = payload.shot || {};
-    const ticks = ticksFromShot(shot);
-    let candles = payload.candles || [];
+    const ticks = ticksFromShot(shot, payload.candles || []);
     const wrap = canvas.parentElement;
     const cssW = Math.max(640, wrap.clientWidth);
     const cssH = 520;
@@ -449,232 +329,32 @@
     canvas.height = Math.floor(cssH * dpr);
     canvas.style.width = cssW + "px";
     canvas.style.height = cssH + "px";
-
-    if (ticks.length >= 4) {
-      $("chartHint").textContent =
-        "Тики как в MoonTrader: зелёный buy / красный sell. Фиолетовая рамка — окно измерения. Янтарная линия ордера живёт 0.3 с после входа.";
-      drawTickChart(canvas, shot, ticks, cssW, cssH, dpr);
-      return;
-    }
-    if (!candles.length) candles = synthetic(shot);
-    if (!candles.length) {
-      $("chartHint").textContent = "Нет тиков и свечей вокруг этого времени";
+    if (!ticks.length) {
+      $("chartHint").textContent = "Нет тиков вокруг этого прострела";
       const ctx = canvas.getContext("2d");
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       return;
     }
     $("chartHint").textContent =
-      "Нет сохранённой ленты тиков — показаны свечи OKX. Янтарная линия ордера — 0.3 с после входа.";
-    const ctx = canvas.getContext("2d");
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    const padL = 72, padR = 70, padT = 16, padB = 22;
-    const volH = Math.floor(cssH * 0.2);
-    const gap = 10;
-    const plotW = cssW - padL - padR;
-    const plotH = cssH - padT - padB - volH - gap;
-    const volTop = padT + plotH + gap;
-
-    const startPx = Number(shot.start_price) || candles[0].o;
-    const extPx = Number(shot.extreme_price) || 0;
-    const fillPx = Number(shot.fill_price) || orderPrice(shot);
-    const exitPx = Number(shot.exit_price) || Number(shot.last_price) || 0;
-    const highs = candles.map((c) => c.h);
-    const lows = candles.map((c) => c.l);
-    if (startPx) { highs.push(startPx); lows.push(startPx); }
-    if (extPx) { highs.push(extPx); lows.push(extPx); }
-    if (fillPx) { highs.push(fillPx); lows.push(fillPx); }
-    if (exitPx) { highs.push(exitPx); lows.push(exitPx); }
-    let pMax = Math.max.apply(null, highs);
-    let pMin = Math.min.apply(null, lows);
-    const pad = (pMax - pMin) * 0.12 || pMax * 0.002;
-    pMax += pad;
-    pMin -= pad;
-    const volMax = Math.max.apply(null, candles.map((c) => c.vol || 0)) || 1;
-
-    const n = candles.length;
-    const slot = plotW / n;
-    const bodyW = Math.max(1.5, Math.min(9, slot * 0.62));
-
-    function xAt(i) { return padL + slot * i + slot / 2; }
-    function yAt(p) { return padT + (pMax - p) / (pMax - pMin) * plotH; }
-    function pctOf(p) { return startPx ? (p - startPx) / startPx * 100 : 0; }
-
-    ctx.fillStyle = "#10141c";
-    ctx.fillRect(0, 0, cssW, cssH);
-
-    ctx.strokeStyle = GRID;
-    ctx.lineWidth = 1;
-    const pctMin = pctOf(pMin);
-    const pctMax = pctOf(pMax);
-    const step = niceStep(Math.abs(pctMax - pctMin));
-    const startTick = Math.floor(pctMin / step) * step;
-    for (let pct = startTick; pct <= pctMax + 1e-9; pct += step) {
-      const price = startPx * (1 + pct / 100);
-      const y = yAt(price);
-      if (y < padT || y > padT + plotH) continue;
-      ctx.beginPath();
-      ctx.moveTo(padL, y);
-      ctx.lineTo(padL + plotW, y);
-      ctx.stroke();
-      ctx.fillStyle = MUTED;
-      ctx.font = "11px Segoe UI, sans-serif";
-      ctx.textAlign = "right";
-      ctx.fillText(fmtPx(price), padL - 8, y + 4);
-    }
-
-    const peak = Number(shot.peak_ts) || 0;
-    const win = Number(shot.window_ms) || 0;
-    if (peak) {
-      const t0 = peak - win;
-      const i0 = candles.findIndex((c) => c.ts >= t0);
-      const i1 = candles.reduce((acc, c, i) => (c.ts <= peak + 400 ? i : acc), 0);
-      if (i0 >= 0) {
-        ctx.fillStyle = shot.direction === "UP" ? "rgba(79,186,122,0.10)" : "rgba(225,91,100,0.10)";
-        const x0 = xAt(Math.max(0, i0)) - slot / 2;
-        const x1 = xAt(Math.max(i0, i1)) + slot / 2;
-        ctx.fillRect(x0, padT, Math.max(slot, x1 - x0), plotH);
-      }
-    }
-
-    candles.forEach((c, i) => {
-      const up = c.c >= c.o;
-      const color = up ? UP : DOWN;
-      const x = xAt(i);
-      ctx.strokeStyle = color;
-      ctx.fillStyle = color;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(x, yAt(c.h));
-      ctx.lineTo(x, yAt(c.l));
-      ctx.stroke();
-      const y1 = yAt(Math.max(c.o, c.c));
-      const y2 = yAt(Math.min(c.o, c.c));
-      const h = Math.max(1, y2 - y1);
-      ctx.fillRect(x - bodyW / 2, y1, bodyW, h);
-    });
-
-    if (startPx) {
-      const y = yAt(startPx);
-      ctx.setLineDash([4, 4]);
-      ctx.strokeStyle = MUTED;
-      ctx.beginPath();
-      ctx.moveTo(padL, y);
-      ctx.lineTo(padL + plotW, y);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    const shotColor = shot.direction === "UP" ? UP : DOWN;
-    if (startPx && extPx) {
-      const y0 = yAt(startPx);
-      const y1 = yAt(extPx);
-      const peakIdx = candles.reduce((best, c, i) => {
-        if (!peak) return best;
-        return Math.abs(c.ts - peak) < Math.abs(candles[best].ts - peak) ? i : best;
-      }, 0);
-      const xr = xAt(peakIdx) + Math.max(10, bodyW);
-      ctx.strokeStyle = shotColor;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(xr, y0);
-      ctx.lineTo(xr, y1);
-      ctx.stroke();
-      const ticks = 6;
-      for (let i = 0; i <= ticks; i++) {
-        const y = y0 + (y1 - y0) * i / ticks;
-        ctx.beginPath();
-        ctx.moveTo(xr - 4, y);
-        ctx.lineTo(xr + 4, y);
-        ctx.stroke();
-      }
-      const midY = (y0 + y1) / 2;
-      ctx.fillStyle = shotColor;
-      ctx.font = "bold 13px Segoe UI, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillText(fmt(shot.percent || Math.abs(pctOf(extPx)), 2) + "%", xr + 8, midY + 4);
-    }
-
-    drawOrderOverlay(ctx, {
-      candles, shot, fillPx, exitPx, startPx,
-      padL, padT, plotW, plotH, slot, bodyW,
-      xAt, yAt, xAtTs: (ts) => xAtTs(candles, ts, padL, slot),
-    });
-
-    ctx.textAlign = "left";
-    ctx.font = "11px Segoe UI, sans-serif";
-    for (let pct = startTick; pct <= pctMax + 1e-9; pct += step) {
-      const price = startPx * (1 + pct / 100);
-      const y = yAt(price);
-      if (y < padT || y > padT + plotH) continue;
-      const label = (pct >= 0 ? "+" : "") + fmt(pct, step < 0.5 ? 2 : 1) + "%";
-      const nearShot = extPx && Math.abs(pct - pctOf(extPx)) < step * 0.35;
-      const orderPct = fillPx && startPx ? (fillPx - startPx) / startPx * 100 : null;
-      const nearOrder = orderPct != null && Math.abs(pct - orderPct) < step * 0.35;
-      ctx.fillStyle = nearOrder ? AMBER : (nearShot ? shotColor : MUTED);
-      ctx.fillText(label, padL + plotW + 8, y + 4);
-      ctx.strokeStyle = nearOrder ? AMBER : (nearShot ? shotColor : GRID);
-      ctx.beginPath();
-      ctx.moveTo(padL + plotW, y);
-      ctx.lineTo(padL + plotW + 6, y);
-      ctx.stroke();
-    }
-
-    candles.forEach((c, i) => {
-      const x = xAt(i);
-      const h = (c.vol || 0) / volMax * (volH - 4);
-      ctx.fillStyle = c.c >= c.o ? UP + "cc" : DOWN + "cc";
-      ctx.fillRect(x - bodyW / 2, volTop + volH - h, bodyW, h);
-    });
-    ctx.fillStyle = MUTED;
-    ctx.font = "11px Segoe UI, sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText("объём", padL, volTop - 2);
-
-    if (peak) {
-      const peakC = candles.reduce((best, c) => Math.abs(c.ts - peak) < Math.abs(best.ts - peak) ? c : best, candles[0]);
-      const idx = candles.indexOf(peakC);
-      const x = xAt(idx);
-      const money = peakC.vol_quote || shot.quote_volume || 0;
-      ctx.fillStyle = AMBER;
-      ctx.font = "bold 11px Segoe UI, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(fmtVol(peakC.vol) + " · " + fmtMoney(money), x, volTop + 12);
-    }
-
-    ctx.fillStyle = MUTED;
-    ctx.font = "10px Segoe UI, sans-serif";
-    ctx.textAlign = "center";
-    [0, Math.floor(n / 2), n - 1].forEach((i) => {
-      if (candles[i]) ctx.fillText(fmtTime(candles[i].ts), xAt(i), cssH - 6);
-    });
-
-    canvas.onmousemove = function (ev) {
-      const rect = canvas.getBoundingClientRect();
-      const x = (ev.clientX - rect.left);
-      const i = Math.max(0, Math.min(n - 1, Math.floor((x - padL) / slot)));
-      const c = candles[i];
-      if (!c) return;
-      $("chartHint").textContent =
-        `${fmtTime(c.ts)}  O ${fmtPx(c.o)}  H ${fmtPx(c.h)}  L ${fmtPx(c.l)}  C ${fmtPx(c.c)}` +
-        `  ·  vol ${fmtVol(c.vol)}  ·  ${fmtMoney(c.vol_quote)}` +
-        `  ·  ${startPx ? ((c.c - startPx) / startPx * 100 >= 0 ? "+" : "") + fmt(pctOf(c.c), 2) + "%" : ""}`;
-    };
+      "Фиолетовая рамка — ровно 1 секунда тиков. Зелёная стрелка — открытие ордера, синяя — закрытие через 0.3 с.";
+    drawMtChart(canvas, shot, ticks, cssW, cssH, dpr);
   }
 
   window.openShotChart = async function (api, symbol, ts) {
-    openOverlay();
+    $("chartOverlay").classList.add("open");
     $("chartTitle").textContent = symbol;
-    $("chartSub").textContent = "загрузка свечей…";
-    $("chartHint").textContent = "Один запрос к OKX, без фоновой нагрузки.";
+    $("chartSub").textContent = "загрузка тиков…";
+    $("chartHint").textContent = "";
     try {
       const payload = await api(`/api/chart?symbol=${encodeURIComponent(symbol)}&ts=${ts}`);
-      setTitle(payload.shot || { symbol: symbol }, payload.bar || "1s");
+      setTitle(payload.shot || { symbol: symbol });
       drawChart(payload);
     } catch (err) {
       $("chartHint").textContent = "Не удалось загрузить график: " + err.message;
     }
   };
 
-  window.closeShotChart = closeOverlay;
+  window.closeShotChart = function () {
+    $("chartOverlay").classList.remove("open");
+  };
 })();

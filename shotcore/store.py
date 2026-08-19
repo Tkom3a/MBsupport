@@ -645,6 +645,11 @@ def _as_path(value: Any) -> list[list[float]]:
                     row.append(float(pt[2]))
                 except (TypeError, ValueError):
                     row.append(0.0)
+            if len(pt) >= 4:
+                try:
+                    row.append(float(pt[3]))
+                except (TypeError, ValueError):
+                    row.append(0.0)
             out.append(row)
     return out
 
