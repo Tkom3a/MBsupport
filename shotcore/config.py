@@ -50,6 +50,9 @@ class ShotConfig:
     vplus_min_pnl: float = 0.3
     tp_min_pct: float = 0.3
     suggest_inside_pct: float = 0.05
+    suggest_inside_max_pct: float = 0.10
+    min_win_pct: float = 70.0
+    min_fills: int = 3
 
 
 @dataclass
@@ -76,7 +79,7 @@ class WebConfig:
     port: int = 4861
     token: str = ""
     timezone: str = "Europe/Moscow"
-    stats_lookback_min: int = 1440
+    stats_lookback_min: int = 180
 
 
 @dataclass
@@ -264,6 +267,12 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         shot.vplus_min_pnl = shot.tp_min_pct
     if _env_filled("SUGGEST_INSIDE_PCT"):
         shot.suggest_inside_pct = _as_float("SUGGEST_INSIDE_PCT", shot.suggest_inside_pct)
+    if _env_filled("SUGGEST_INSIDE_MAX_PCT"):
+        shot.suggest_inside_max_pct = _as_float("SUGGEST_INSIDE_MAX_PCT", shot.suggest_inside_max_pct)
+    if _env_filled("MIN_WIN_PCT"):
+        shot.min_win_pct = _as_float("MIN_WIN_PCT", shot.min_win_pct)
+    if _env_filled("MIN_FILLS"):
+        shot.min_fills = _as_int("MIN_FILLS", shot.min_fills)
 
     if _env_filled("BTC_SYMBOL"):
         btc_filter.symbol = norm_symbol(_env("BTC_SYMBOL"))
@@ -334,6 +343,9 @@ def public_filters(cfg: AppConfig) -> dict[str, Any]:
         "hold_ms": cfg.shot.hold_ms,
         "tp_min_pct": cfg.shot.tp_min_pct,
         "suggest_inside_pct": cfg.shot.suggest_inside_pct,
+        "suggest_inside_max_pct": cfg.shot.suggest_inside_max_pct,
+        "min_win_pct": cfg.shot.min_win_pct,
+        "min_fills": cfg.shot.min_fills,
         "mt_run_hours": cfg.output.mt_run_hours,
         "mt_plan_name": cfg.output.mt_plan_name,
         "distance_levels": cfg.shot.distance_levels,

@@ -186,7 +186,7 @@ def fetch_plan(url: str, token: str) -> dict[str, Any]:
         )
     req_url = base + "/api/mt-plan"
     query: dict[str, str] = {}
-    lookback = env_int("LOOKBACK_MIN", 1440)
+    lookback = env_int("LOOKBACK_MIN", 180)
     query["lookback"] = str(lookback)
     if token:
         query["token"] = token
@@ -1003,7 +1003,7 @@ def cmd_plan() -> None:
         "run_hours:", plan.get("run_hours"),
         "pairs in plan:", len(plan.get("pairs") or []),
     )
-    print("selected:", len(pairs), "orderSize:", order_size(), "LOOKBACK_MIN:", env_int("LOOKBACK_MIN", 1440))
+    print("selected:", len(pairs), "orderSize:", order_size(), "LOOKBACK_MIN:", env_int("LOOKBACK_MIN", 180))
     for pair in pairs:
         print(
             f"  {pair.get('symbol'):<22} rec={pair.get('recommend_pct')}%  "
@@ -1020,7 +1020,7 @@ def cmd_apply(dry: bool) -> dict[str, Any]:
 def cmd_watch(dry: bool) -> None:
     poll = max(5, env_int("POLL_SEC", 15))
     log(
-        f"watch каждые {poll} с · lookback={env_int('LOOKBACK_MIN', 1440)} мин · "
+        f"watch каждые {poll} с · lookback={env_int('LOOKBACK_MIN', 180)} мин · "
         f"{env('SHOTCORE_URL')} → {default_algos_path()}"
     )
     while True:

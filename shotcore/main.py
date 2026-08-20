@@ -37,6 +37,9 @@ class ShotCore:
             tp_min_pct=cfg.shot.tp_min_pct,
             hold_ms=cfg.shot.hold_ms,
             suggest_inside_pct=cfg.shot.suggest_inside_pct,
+            suggest_inside_max_pct=cfg.shot.suggest_inside_max_pct,
+            min_win_pct=cfg.shot.min_win_pct,
+            min_fills=cfg.shot.min_fills,
             mt_plan_name=cfg.output.mt_plan_name,
             mt_run_hours=cfg.output.mt_run_hours,
         )

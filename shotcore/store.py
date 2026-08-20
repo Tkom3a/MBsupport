@@ -58,6 +58,9 @@ class ShotStore:
         tp_min_pct: float = 0.3,
         hold_ms: int = 300,
         suggest_inside_pct: float = 0.05,
+        suggest_inside_max_pct: float = 0.10,
+        min_win_pct: float = 70.0,
+        min_fills: int = 3,
         mt_plan_name: str = "mt_plan.json",
         mt_run_hours: float = 3.0,
     ):
@@ -75,6 +78,9 @@ class ShotStore:
         self.tp_min_pct = max(float(tp_min_pct), 0.0)
         self.hold_ms = max(int(hold_ms), 50)
         self.suggest_inside_pct = max(float(suggest_inside_pct), 0.0)
+        self.suggest_inside_max_pct = max(float(suggest_inside_max_pct), self.suggest_inside_pct)
+        self.min_win_pct = max(float(min_win_pct), 0.0)
+        self.min_fills = max(int(min_fills), 1)
         self.events: deque[dict[str, Any]] = deque(maxlen=50_000)
         self.total = 0
         self._stats_memo: tuple[Any, dict[str, Any]] | None = None
@@ -250,8 +256,14 @@ class ShotStore:
             pnls = [float(x["pnl_pct"]) for x in shots]
             last = shots[-1]
             ordered = sorted(percents)
-            suggest, plus_n, minus_n, win_prob, suggest_tp = _recommend_and_score(
-                shots, self.hold_ms, self.suggest_inside_pct, self.distance_levels
+            suggest, plus_n, minus_n, win_prob, suggest_tp, filter_hint = _recommend_and_score(
+                shots,
+                self.hold_ms,
+                self.suggest_inside_pct,
+                self.distance_levels,
+                inside_max=self.suggest_inside_max_pct,
+                min_win_pct=self.min_win_pct,
+                min_fills=self.min_fills,
             )
             rows.append(
                 {
@@ -269,6 +281,7 @@ class ShotStore:
                     "max": round(ordered[-1], 4),
                     "suggest_distance": suggest,
                     "suggest_tp_pct": suggest_tp,
+                    "filter_hint": filter_hint,
                     "score_plus": plus_n,
                     "score_minus": minus_n,
                     "score_text": f"{plus_n}/{minus_n}",
@@ -315,6 +328,7 @@ class ShotStore:
                     "count",
                     "suggest_distance",
                     "suggest_tp_pct",
+                    "filter_hint",
                     "score_plus",
                     "score_minus",
                     "win_prob",
@@ -347,7 +361,8 @@ class ShotStore:
         pairs = []
         for row in payload.get("rows") or []:
             recommend = round(float(row.get("suggest_distance") or 0), 4)
-            if recommend <= 0:
+            win = float(row.get("win_prob") or 0)
+            if recommend <= 0 or win + 1e-9 < self.min_win_pct:
                 continue
             symbol = str(row.get("symbol") or "")
             if not symbol:
@@ -366,6 +381,7 @@ class ShotStore:
                     "count": int(row.get("count") or 0),
                     "score_plus": int(row.get("score_plus") or 0),
                     "score_minus": int(row.get("score_minus") or 0),
+                    "filter_hint": row.get("filter_hint") or "",
                     "win_prob": float(row.get("win_prob") or 0),
                 }
             )
@@ -515,19 +531,66 @@ def _recommend_and_score(
     hold_ms: int,
     inside: float,
     levels: list[float] | None = None,
-) -> tuple[float, int, int, float, float]:
-    """По всей массе прострелов пары выбирает D и TP с максимальной суммой PnL.
+    inside_max: float | None = None,
+    min_win_pct: float = 70.0,
+    min_fills: int = 3,
+) -> tuple[float, int, int, float, float, str]:
+    """Все прострелы пары, затем D у края и фильтр шума.
 
-    Ордер на D заполняется, если глубина прострела >= D (1% не наполняет 5%,
-    а 10% наполняет и 1%, и 5%, и 10%). Закрытие: TP если цена дошла до него
-    за hold_ms после входа, иначе выход по времени.
+    Ордер на 0.05–0.10% внутрь экстремума. Выход: TP за 0.3 с или по времени.
+    Рекомендация только если доля плюса не ниже min_win_pct.
     """
-    percents = [float(x.get("percent") or 0) for x in shots if float(x.get("percent") or 0) > 0]
-    if not percents:
-        return 0.0, 0, 0, 0.0, 0.0
-    distances = _candidate_distances(shots, levels or [], inside)
+    inside_hi = inside if inside_max is None else inside_max
+    variants: list[tuple[str, list[dict[str, Any]]]] = [("все", shots)]
+    calm = [row for row in shots if row.get("btc_calm")]
+    if min_fills <= len(calm) < len(shots):
+        variants.append(("спокойный BTC", calm))
+    percents = sorted(float(row.get("percent") or 0) for row in shots if float(row.get("percent") or 0) > 0)
+    if percents:
+        floor = round(_percentile(percents, 50), 2)
+        if floor >= 1.0:
+            deep = [row for row in shots if float(row.get("percent") or 0) + 1e-9 >= floor]
+            if min_fills <= len(deep) < len(shots):
+                variants.append((f"глубина ≥ {floor:g}%", deep))
+    best: tuple | None = None
+    hint = ""
+    for name, subset in variants:
+        found = _search_dtp(
+            subset,
+            hold_ms,
+            inside,
+            inside_hi,
+            levels or [],
+            min_win_pct,
+            min_fills,
+        )
+        if found is None:
+            continue
+        if _score_better(found, best):
+            best = found
+            hint = name
+    if best is None:
+        return 0.0, 0, 0, 0.0, 0.0, ""
+    _total, plus, _hits, filled, distance, tp = best
+    minus = int(filled) - plus
+    prob = round(100.0 * plus / filled, 1) if filled else 0.0
+    return round(distance, 2), plus, minus, prob, round(tp, 2), hint
+
+
+def _search_dtp(
+    shots: list[dict[str, Any]],
+    hold_ms: int,
+    inside_min: float,
+    inside_max: float,
+    levels: list[float],
+    min_win_pct: float,
+    min_fills: int,
+) -> tuple | None:
+    if len(shots) < min_fills:
+        return None
+    distances = _candidate_distances(shots, levels, inside_min, inside_max)
     if not distances:
-        return 0.0, 0, 0, 0.0, 0.0
+        return None
     indexed = [(shot, _report_map(shot)) for shot in shots]
     tps = _candidate_tps()
     best: tuple | None = None
@@ -538,7 +601,7 @@ def _recommend_and_score(
             if sim is None:
                 continue
             fills.append(sim)
-        if not fills:
+        if len(fills) < min_fills:
             continue
         max_mfe = max(mfe for _time_pnl, mfe in fills)
         tp_set = {tp for tp in tps if 0 < tp <= max_mfe + 1e-9}
@@ -562,16 +625,14 @@ def _recommend_and_score(
                 total += pnl
                 if pnl > 0:
                     plus += 1
+            win = 100.0 * plus / len(fills)
+            if win + 1e-9 < min_win_pct or total <= 0:
+                continue
             shown_tp = 0.0 if tp is None else tp
             key = (round(total, 6), plus, hits, len(fills), distance, shown_tp)
             if _score_better(key, best):
-                best = key + (len(fills),)
-    if best is None:
-        return 0.0, 0, 0, 0.0, 0.0
-    _total, plus, _hits, _nfills, distance, tp, filled = best
-    minus = filled - plus
-    prob = round(100.0 * plus / filled, 1) if filled else 0.0
-    return round(distance, 2), plus, minus, prob, round(tp, 2)
+                best = key
+    return best
 
 
 def _score_better(key: tuple, best: tuple | None) -> bool:
@@ -588,24 +649,34 @@ def _score_better(key: tuple, best: tuple | None) -> bool:
     return key[4] >= best[4]
 
 
+def _inside_steps(inside_min: float, inside_max: float) -> list[float]:
+    lo = max(0.05, round(float(inside_min or 0.05), 2))
+    hi = max(lo, round(float(inside_max or lo), 2))
+    out: list[float] = []
+    cursor = lo
+    while cursor <= hi + 1e-9:
+        out.append(round(cursor, 2))
+        cursor = round(cursor + 0.01, 2)
+    return out
+
+
 def _candidate_distances(
     shots: list[dict[str, Any]],
     levels: list[float],
-    inside: float,
+    inside_min: float,
+    inside_max: float | None = None,
 ) -> list[float]:
+    """D у края прострела: экстремум минус 0.05…0.10%, плюс уровни MT."""
     dists: set[float] = {round(float(level), 2) for level in levels if float(level) > 0}
-    percents = [float(shot.get("percent") or 0) for shot in shots]
-    percents = [pct for pct in percents if pct >= 0.5]
-    if not percents:
-        return sorted(d for d in dists if 0.5 <= d <= 20.0)
-    hi = min(20.0, max(percents))
-    for pct in percents:
-        dists.add(round(pct, 2))
-        dists.add(round(max(0.5, pct - max(inside, 0.0)), 2))
-    cursor = 0.50
-    while cursor <= hi + 1e-9:
-        dists.add(round(cursor, 2))
-        cursor = round(cursor + (0.10 if cursor >= 3.99 else 0.05), 2)
+    insides = _inside_steps(inside_min, inside_min if inside_max is None else inside_max)
+    for shot in shots:
+        pct = float(shot.get("percent") or 0)
+        if pct < 0.5:
+            continue
+        for inside in insides:
+            dist = round(pct - inside, 2)
+            if 0.5 <= dist <= 20.0:
+                dists.add(dist)
     return sorted(d for d in dists if 0.5 <= d <= 20.0)
 
 

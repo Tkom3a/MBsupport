@@ -99,7 +99,7 @@
   <header>
     <div>
       <h1>Shot<span>Core</span> — разведка дистанций</h1>
-      <div class="meta" id="subtitle">Рекомендация — D и TP с максимальной суммой прибыли по всем прострелам пары · выход по тейку или через 0.3 с</div>
+      <div class="meta" id="subtitle">Разведка за 3 часа: D на 0.05–0.10% внутрь края прострела · TP или выход через 0.3 с · рекомендация только при плюсе ≥ 70%</div>
     </div>
     <div class="live"><span class="dot"></span><span id="live">ожидание данных</span></div>
   </header>
@@ -113,8 +113,9 @@
     <select id="lookback">
       <option value="15">15 минут</option>
       <option value="60">1 час</option>
+      <option value="180" selected>3 часа</option>
       <option value="360">6 часов</option>
-      <option value="1440" selected>24 часа</option>
+      <option value="1440">24 часа</option>
       <option value="0">Всё время</option>
     </select>
     <select id="direction">
@@ -136,13 +137,14 @@
             <th>Прострелы</th>
             <th>Рекомендация</th>
             <th>TP</th>
+            <th>Фильтр</th>
             <th>Счет+%</th>
             <th>Вер.</th>
             <th>Глубина p50 / p90</th>
             <th>Последний</th>
           </tr>
         </thead>
-        <tbody id="rows"><tr><td class="empty" colspan="9">Пока нет прострелов в выбранном окне</td></tr></tbody>
+        <tbody id="rows"><tr><td class="empty" colspan="10">Пока нет прострелов в выбранном окне</td></tr></tbody>
       </table>
     </section>
     <section class="panel feed-wrap">
@@ -157,7 +159,7 @@
     </section>
   </div>
   <div class="note">
-    По каждой паре перебираются все прострелы: ордер на D% исполняется, если импульс дошёл до D (прострел 10% участвует в оценке 1%, 5% и 10%; прострел 1% — только в оценке ≤1%). Сделка закрывается по TP, если цена дошла до него за 0.3 с после входа, иначе по времени. В рекомендацию идут D и TP с максимальной суммой прибыли. Хранение — 24 часа.
+    Сначала пишутся все прострелы пары за окно (по умолчанию 3 часа). Потом подбирается дистанция: измерить глубину импульса и отступить 0.05–0.10% от края, чтобы лимит заполнился. Закрытие — TP, если цена дошла за 0.3 с после входа, иначе по времени. В рекомендацию идёт связка D/TP с максимальной прибылью среди тех, где плюсовых сделок ≥ 70%. Если порог не набирается — пара без рекомендации (шум). Дополнительно проверяются фильтры «спокойный BTC» и отсечение мелких импульсов.
   </div>
   <div class="mt-wrap">
     <section class="mt-box">
@@ -297,7 +299,7 @@
       document.getElementById("live").textContent =
         `${stats.symbols_watched || 0} в подписке · тик ${((f.shot_windows_ms || [500,700])[0] || 500)} мс`;
       document.getElementById("subtitle").textContent =
-        `${f.inst_type} ${f.quote} · измерение 0.5–0.7 с / 1–2 тика · рекомендация −${f.suggest_inside_pct ?? 0.05}% внутрь прострела`;
+        `${f.inst_type} ${f.quote} · D на ${(f.suggest_inside_pct ?? 0.05)}–${(f.suggest_inside_max_pct ?? 0.10)}% внутрь края · плюс ≥ ${f.min_win_pct ?? 70}%`;
       document.getElementById("kpiPairs").textContent = stats.pairs ?? 0;
       document.getElementById("kpiShots").textContent = stats.shots ?? 0;
       document.getElementById("kpiActive").textContent = activeN;
@@ -323,6 +325,8 @@
         ["Тик", ((f.shot_windows_ms || [500, 700, 1200]).join("/") ) + " мс"],
         ["TP", (f.tp_min_pct ?? 0.3) + "%"],
         ["Hold", (f.hold_ms || 300) + " мс"],
+        ["Внутрь края", `${f.suggest_inside_pct ?? 0.05}–${f.suggest_inside_max_pct ?? 0.10}%`],
+        ["Плюс ≥", (f.min_win_pct ?? 70) + "%"],
         ["Distance", (f.distance_levels || []).join(" / ")],
         ["BTC ±", `${f.btc_range_pct}% / ${f.btc_window_sec}с`],
       ].map(([k, v]) => `<span class="chip">${k}: <b>${v}</b></span>`).join("");
@@ -344,17 +348,18 @@
       const rows = lastRows.filter(r => !needle || r.symbol.toLowerCase().includes(needle));
       const body = document.getElementById("rows");
       if (!rows.length) {
-        body.innerHTML = `<tr><td class="empty" colspan="9">Нет прострелов в выбранном окне</td></tr>`;
+        body.innerHTML = `<tr><td class="empty" colspan="10">Нет прострелов в выбранном окне</td></tr>`;
       } else {
         body.innerHTML = rows.map(r => `
           <tr data-symbol="${r.symbol}">
             <td>${r.symbol}</td>
             <td class="amber">${lever(r.lever)}</td>
             <td>${r.count} <span class="down">${r.count_down}</span>/<span class="up">${r.count_up}</span></td>
-            <td class="amber">${fmt(r.suggest_distance)}%</td>
+            <td class="amber">${r.suggest_distance > 0 ? fmt(r.suggest_distance) + "%" : "—"}</td>
             <td class="amber">${r.suggest_tp_pct > 0 ? fmt(r.suggest_tp_pct) + "%" : "—"}</td>
-            <td class="amber">${r.score_text || "0/0"}</td>
-            <td>${fmt(r.win_prob || 0, 0)}%</td>
+            <td class="meta">${r.filter_hint || "—"}</td>
+            <td class="amber">${r.suggest_distance > 0 ? (r.score_text || "0/0") : "—"}</td>
+            <td>${r.suggest_distance > 0 ? fmt(r.win_prob || 0, 0) + "%" : "—"}</td>
             <td>${fmt(r.p50)} / ${fmt(r.p90)}</td>
             <td class="${dirClass(r.last_direction)}">${r.last_direction} ${fmt(r.last_percent)} · ${r.last_time}</td>
           </tr>`).join("");

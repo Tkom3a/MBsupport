@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Виртуальный клиент MT — кликающий агент</title>
+  <style>
+    :root {
+      --bg: #0e1116;
+      --mt: #171b22;
+      --mt2: #1e2430;
+      --line: #2c3340;
+      --text: #d5dbe6;
+      --muted: #8b95a8;
+      --accent: #d7a13b;
+      --up: #4fba7a;
+      --down: #e15b64;
+      --chip: #252b36;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 "Segoe UI", system-ui, sans-serif; }
+    .lab { display: grid; grid-template-columns: 1.35fr 0.75fr; height: 100%; }
+    .stage { padding: 18px 16px 16px 20px; min-width: 0; }
+    .hint { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+    .window {
+      background: var(--mt); border: 1px solid var(--line); border-radius: 8px;
+      height: calc(100% - 42px); display: flex; flex-direction: column; overflow: hidden; position: relative;
+    }
+    .titlebar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 12px; background: #12161c; border-bottom: 1px solid var(--line); font-weight: 650;
+    }
+    .titlebar span { color: var(--accent); }
+    .dots { display: flex; gap: 6px; }
+    .dots i { width: 10px; height: 10px; border-radius: 50%; background: #3a4150; display: block; }
+    .body { display: grid; grid-template-columns: 168px 1fr; flex: 1; min-height: 0; }
+    .folders { border-right: 1px solid var(--line); padding: 8px; overflow: auto; }
+    .folder { padding: 6px 8px; border-radius: 5px; color: var(--muted); cursor: pointer; }
+    .folder.on { background: #2a3344; color: var(--text); }
+    .main { display: flex; flex-direction: column; min-width: 0; }
+    .toolbar { display: flex; gap: 6px; padding: 8px; border-bottom: 1px solid var(--line); }
+    button, input, select {
+      background: var(--chip); color: var(--text); border: 1px solid var(--line);
+      border-radius: 5px; padding: 6px 10px; font: inherit;
+    }
+    button { cursor: pointer; }
+    button.primary { background: #3a4a22; border-color: #5a7a32; color: #d7efb0; }
+    button.danger { background: #3a2226; border-color: #7a323c; }
+    button:disabled { opacity: 0.45; cursor: default; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 7px 8px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+    th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+    tbody tr.sel { background: #2a3344; }
+    tbody tr.run td:first-child { color: var(--up); }
+    .list { flex: 1; overflow: auto; }
+    .cursor {
+      position: absolute; width: 16px; height: 16px; margin: -2px 0 0 -2px; pointer-events: none; z-index: 30;
+      transition: left 0.28s ease, top 0.28s ease;
+    }
+    .cursor svg { filter: drop-shadow(0 1px 1px #000); }
+    .click-flash {
+      position: absolute; width: 22px; height: 22px; border: 2px solid var(--accent); border-radius: 50%;
+      pointer-events: none; z-index: 29; transform: translate(-50%, -50%); opacity: 0;
+    }
+    .modal {
+      display: none; position: absolute; inset: 0; background: #05070ccc; z-index: 20;
+      align-items: center; justify-content: center;
+    }
+    .modal.open { display: flex; }
+    .dlg {
+      width: min(420px, 92%); background: var(--mt2); border: 1px solid var(--line);
+      border-radius: 8px; padding: 14px;
+    }
+    .dlg h3 { margin: 0 0 10px; font-size: 14px; }
+    .row { display: grid; grid-template-columns: 120px 1fr; gap: 8px; align-items: center; margin-bottom: 8px; }
+    .row input { width: 100%; }
+    .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+    .side { border-left: 1px solid var(--line); padding: 16px; overflow: auto; background: #10141a; }
+    .side h1 { margin: 0 0 6px; font-size: 16px; }
+    .side label { display: block; color: var(--muted); font-size: 11px; margin: 10px 0 4px; }
+    .side input, .side select { width: 100%; }
+    .btns { display: flex; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
+    .log {
+      background: #0b0e13; border: 1px solid var(--line); border-radius: 6px;
+      padding: 8px; height: 280px; overflow: auto; font: 12px/1.45 ui-monospace, Consolas, monospace;
+    }
+    .log .ok { color: var(--up); }
+    .log .bad { color: var(--down); }
+    .log .act { color: var(--accent); }
+    .stat { color: var(--muted); font-size: 12px; margin-top: 8px; }
+    @media (max-width: 980px) {
+      .lab { grid-template-columns: 1fr; }
+      .window { height: 520px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="lab">
+    <div class="stage">
+      <p class="hint">Вымышленное окно клиента. Агент кликает здесь. Живой MoonTrader не используется.</p>
+      <div class="window" id="mtWindow">
+        <div class="titlebar">MoonTrader — Algorithms <span>virtual</span><div class="dots"><i></i><i></i><i></i></div></div>
+        <div class="body">
+          <div class="folders">
+            <div class="folder" data-folder="x50">24/7 Ключ x50</div>
+            <div class="folder" data-folder="x20">24/7 Ключ x20</div>
+            <div class="folder on" data-folder="mb" id="folderMb">MBsupport</div>
+          </div>
+          <div class="main">
+            <div class="toolbar">
+              <button type="button" id="btnClone" data-click="clone">Запустить клон</button>
+              <button type="button" id="btnStart" data-click="start">Старт</button>
+              <button type="button" id="btnStop" class="danger" data-click="stop">Стоп</button>
+            </div>
+            <div class="list">
+              <table>
+                <thead>
+                  <tr><th>Имя</th><th>Пара</th><th>D%</th><th>TP%</th><th>Плечо</th><th>Статус</th></tr>
+                </thead>
+                <tbody id="algoRows"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="modal" id="cloneModal">
+          <div class="dlg">
+            <h3>Клон Shot Group</h3>
+            <div class="row"><span>White list</span><input id="fPair" data-field="pair" placeholder="trump-usdt-swap" /></div>
+            <div class="row"><span>Distance</span><input id="fDist" data-field="distance" /></div>
+            <div class="row"><span>Take Profit</span><input id="fTp" data-field="tp" /></div>
+            <div class="row"><span>Order size</span><input id="fSize" data-field="size" value="10" /></div>
+            <div class="row"><span>Max leverage</span><input id="fLever" data-field="lever" /></div>
+            <div class="row"><span>Lifetime, ч</span><input id="fHours" data-field="hours" value="3" /></div>
+            <div class="actions">
+              <button type="button" id="btnCancel" data-click="cancel">Отмена</button>
+              <button type="button" class="primary" id="btnApply" data-click="apply">Старт клона</button>
+            </div>
+          </div>
+        </div>
+        <div class="click-flash" id="flash"></div>
+        <div class="cursor" id="cursor" style="left: 24px; top: 48px;">
+          <svg width="16" height="16" viewBox="0 0 16 16"><path fill="#fff" stroke="#111" d="M1 1 L1 12 L4.2 9.6 L6.8 15 L8.4 14.2 L5.8 8.8 L10 8.8 Z"/></svg>
+        </div>
+      </div>
+    </div>
+    <div class="side">
+      <h1>Кликающий агент</h1>
+      <p class="hint">Читает план ShotCore и в виртуальном окне сам: клон → вставка D/TP → старт. Если D/TP сменились — стоп старого клона и новый.</p>
+      <label>Источник плана</label>
+      <select id="source">
+        <option value="demo">учебные пары (без ShotCore)</option>
+        <option value="live">живой /api/mt-plan</option>
+      </select>
+      <label>ShotCore URL</label>
+      <input id="shotcore" placeholder="http://IP:4861" />
+      <label>Lookback, мин</label>
+      <input id="lookback" value="1440" />
+      <label>Скорость кликов</label>
+      <select id="speed">
+        <option value="1">медленно, видно каждый клик</option>
+        <option value="0.45">быстрее</option>
+      </select>
+      <div class="btns">
+        <button type="button" class="primary" id="runBtn">Запустить агента</button>
+        <button type="button" id="stopBtn" disabled>Стоп агента</button>
+        <button type="button" id="resetBtn">Сбросить окно</button>
+      </div>
+      <div class="log" id="log"></div>
+      <div class="stat" id="stat">клонов: 0</div>
+    </div>
+  </div>
+  <script>
+    const DEMO = {
+      lookback_min: 1440,
+      run_hours: 3,
+      pairs: [
+        { symbol: "TRUMP-USDT-SWAP", base: "TRUMP", recommend_pct: 1.91, tp_pct: 0.49, lever: 50, subscribed: true, score_plus: 4, score_minus: 0 },
+        { symbol: "SOL-USDT-SWAP", base: "SOL", recommend_pct: 1.42, tp_pct: 0.35, lever: 50, subscribed: true, score_plus: 6, score_minus: 1 },
+        { symbol: "DOGE-USDT-SWAP", base: "DOGE", recommend_pct: 1.11, tp_pct: 0.3, lever: 20, subscribed: true, score_plus: 3, score_minus: 0 },
+      ],
+    };
+
+    const state = {
+      algos: [
+        { id: "tpl", name: "OKXBuy1Test", pair: "—", d: 1.11, tp: 0.3, lever: 50, status: "мастер", running: false, template: true },
+      ],
+      selected: "tpl",
+      running: false,
+      abort: false,
+    };
+
+    const $ = (id) => document.getElementById(id);
+    const logBox = $("log");
+    const cursor = $("cursor");
+    const flash = $("flash");
+    const windowEl = $("mtWindow");
+
+    function log(msg, cls) {
+      const line = document.createElement("div");
+      if (cls) line.className = cls;
+      line.textContent = new Date().toLocaleTimeString() + "  " + msg;
+      logBox.appendChild(line);
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function renderAlgos() {
+      const body = $("algoRows");
+      body.innerHTML = state.algos.map((a) => `
+        <tr class="${a.id === state.selected ? "sel" : ""} ${a.running ? "run" : ""}" data-id="${a.id}">
+          <td>${a.name}</td><td>${a.pair}</td><td>${a.d}</td><td>${a.tp}</td>
+          <td>x${a.lever}</td><td>${a.status}</td>
+        </tr>`).join("");
+      body.querySelectorAll("tr").forEach((tr) => {
+        tr.addEventListener("click", () => {
+          state.selected = tr.dataset.id;
+          renderAlgos();
+        });
+      });
+      $("stat").textContent = "клонов: " + state.algos.filter((a) => !a.template).length +
+        " · в работе: " + state.algos.filter((a) => a.running).length;
+    }
+
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms * Number($("speed").value)));
+    }
+
+    function pointOf(el) {
+      const wr = windowEl.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
+      return { x: r.left - wr.left + r.width / 2, y: r.top - wr.top + r.height / 2 };
+    }
+
+    async function moveCursor(el) {
+      const p = pointOf(el);
+      cursor.style.left = p.x + "px";
+      cursor.style.top = p.y + "px";
+      await sleep(320);
+    }
+
+    async function clickEl(el, label) {
+      if (state.abort) throw new Error("stop");
+      await moveCursor(el);
+      const p = pointOf(el);
+      flash.style.left = p.x + "px";
+      flash.style.top = p.y + "px";
+      flash.style.opacity = "1";
+      setTimeout(() => { flash.style.opacity = "0"; }, 180);
+      log("клик: " + label, "act");
+      el.click();
+      await sleep(180);
+    }
+
+    async function typeInto(input, value, label) {
+      await clickEl(input, label);
+      input.value = "";
+      const text = String(value);
+      for (const ch of text) {
+        if (state.abort) throw new Error("stop");
+        input.value += ch;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        await sleep(45);
+      }
+      log("вставка " + label + " = " + text, "ok");
+    }
+
+    function openCloneDialog() {
+      $("cloneModal").classList.add("open");
+    }
+    function closeCloneDialog() {
+      $("cloneModal").classList.remove("open");
+    }
+
+    $("btnClone").addEventListener("click", () => {
+      const sel = state.algos.find((a) => a.id === state.selected) || state.algos[0];
+      if (!sel) return;
+      $("fPair").value = "";
+      $("fDist").value = sel.d;
+      $("fTp").value = sel.tp;
+      $("fSize").value = "10";
+      $("fLever").value = sel.lever;
+      $("fHours").value = "3";
+      openCloneDialog();
+    });
+    $("btnCancel").addEventListener("click", closeCloneDialog);
+    $("btnApply").addEventListener("click", () => {
+      const pair = $("fPair").value.trim().toLowerCase() || "unknown-usdt-swap";
+      const base = pair.split("-")[0].toUpperCase();
+      const d = Number($("fDist").value);
+      const tp = Number($("fTp").value);
+      const lever = Number($("fLever").value) || 20;
+      const name = `SC ${base} D${d} TP${tp} x${lever}`;
+      const id = "c" + Date.now();
+      state.algos.push({ id, name, pair, d, tp, lever, status: "клон · 3ч", running: true, template: false });
+      state.selected = id;
+      closeCloneDialog();
+      renderAlgos();
+      log("клон запущен: " + name, "ok");
+    });
+    $("btnStop").addEventListener("click", () => {
+      const a = state.algos.find((x) => x.id === state.selected && !x.template);
+      if (!a) return;
+      a.running = false;
+      a.status = "остановлен";
+      renderAlgos();
+      log("стоп: " + a.name, "bad");
+    });
+    $("btnStart").addEventListener("click", () => {
+      const a = state.algos.find((x) => x.id === state.selected && !x.template);
+      if (!a) return;
+      a.running = true;
+      a.status = "клон · 3ч";
+      renderAlgos();
+      log("старт: " + a.name, "ok");
+    });
+
+    function selectPairs(plan) {
+      const out = [];
+      for (const p of plan.pairs || []) {
+        if (!p.symbol || Number(p.recommend_pct) <= 0) continue;
+        if (String(p.symbol).toUpperCase().startsWith("BTC-")) continue;
+        out.push(p);
+        if (out.length >= 8) break;
+      }
+      return out;
+    }
+
+    function sameClone(algo, pair) {
+      const base = String(pair.base || pair.symbol.split("-")[0]).toUpperCase();
+      return !algo.template && algo.name.startsWith("SC " + base + " ");
+    }
+
+    async function fetchPlan() {
+      if ($("source").value === "demo") return DEMO;
+      const url = new URL("/proxy/mt-plan", location.origin);
+      url.searchParams.set("lookback", $("lookback").value || "1440");
+      if ($("shotcore").value.trim()) url.searchParams.set("shotcore", $("shotcore").value.trim());
+      const res = await fetch(url, { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      return data;
+    }
+
+    async function handlePair(pair) {
+      const base = String(pair.base || pair.symbol.split("-")[0]).toUpperCase();
+      const d = Number(pair.recommend_pct);
+      const tp = Number(pair.tp_pct);
+      const lever = Math.round(Number(pair.lever) || 20);
+      const mtPair = String(pair.symbol).toLowerCase();
+      const existing = state.algos.find((a) => sameClone(a, pair) && a.running);
+      if (existing && Number(existing.d) === d && Number(existing.tp) === tp) {
+        log(base + ": D/TP те же, клон не трогаю");
+        return;
+      }
+      if (existing) {
+        log(base + ": D/TP сменились, стоп старого клона");
+        const row = document.querySelector(`tr[data-id="${existing.id}"]`);
+        if (row) await clickEl(row, "строка " + existing.name);
+        state.selected = existing.id;
+        renderAlgos();
+        await clickEl($("btnStop"), "Стоп");
+      }
+      const tpl = document.querySelector('tr[data-id="tpl"]');
+      await clickEl($("folderMb"), "папка MBsupport");
+      if (tpl) await clickEl(tpl, "шаблон OKXBuy1Test");
+      state.selected = "tpl";
+      renderAlgos();
+      await clickEl($("btnClone"), "Запустить клон");
+      await typeInto($("fPair"), mtPair, "White list");
+      await typeInto($("fDist"), d, "Distance");
+      await typeInto($("fTp"), tp, "Take Profit");
+      await typeInto($("fSize"), 10, "Order size");
+      await typeInto($("fLever"), lever, "Max leverage");
+      await clickEl($("btnApply"), "Старт клона");
+    }
+
+    async function runAgent() {
+      state.running = true;
+      state.abort = false;
+      $("runBtn").disabled = true;
+      $("stopBtn").disabled = false;
+      log("агент старт", "ok");
+      try {
+        const plan = await fetchPlan();
+        const pairs = selectPairs(plan);
+        log("план: " + pairs.length + " пар, lookback " + (plan.lookback_min || $("lookback").value));
+        if (!pairs.length) log("пустой план — нечего кликать", "bad");
+        for (const pair of pairs) {
+          if (state.abort) break;
+          await handlePair(pair);
+        }
+        log("проход закончен", "ok");
+      } catch (err) {
+        if (String(err.message) !== "stop") log("ошибка: " + err.message, "bad");
+        else log("агент остановлен");
+      } finally {
+        state.running = false;
+        $("runBtn").disabled = false;
+        $("stopBtn").disabled = true;
+      }
+    }
+
+    $("runBtn").addEventListener("click", () => runAgent().catch(console.error));
+    $("stopBtn").addEventListener("click", () => { state.abort = true; });
+    $("resetBtn").addEventListener("click", () => {
+      state.abort = true;
+      state.algos = [
+        { id: "tpl", name: "OKXBuy1Test", pair: "—", d: 1.11, tp: 0.3, lever: 50, status: "мастер", running: false, template: true },
+      ];
+      state.selected = "tpl";
+      closeCloneDialog();
+      renderAlgos();
+      log("окно сброшено");
+    });
+
+    renderAlgos();
+    log("стенд готов. Сначала учебные пары, потом можно включить живой план.");
+  </script>
+</body>
+</html>
