@@ -216,8 +216,8 @@ class ShotStore:
             pnls = [float(x["pnl_pct"]) for x in shots]
             last = shots[-1]
             ordered = sorted(percents)
-            suggest, plus_n, minus_n, win_prob = _recommend_and_score(
-                shots, self.tp_min_pct, self.hold_ms, self.suggest_inside_pct
+            suggest, plus_n, minus_n, win_prob, suggest_tp = _recommend_and_score(
+                shots, self.hold_ms, self.suggest_inside_pct, self.distance_levels
             )
             _, level_stats = _best_distance(shots, self.distance_levels)
             rows.append(
@@ -235,6 +235,7 @@ class ShotStore:
                     "p90": round(_percentile(ordered, 90), 4),
                     "max": round(ordered[-1], 4),
                     "suggest_distance": suggest,
+                    "suggest_tp_pct": suggest_tp,
                     "score_plus": plus_n,
                     "score_minus": minus_n,
                     "score_text": f"{plus_n}/{minus_n}",
@@ -274,6 +275,7 @@ class ShotStore:
                     "symbol",
                     "count",
                     "suggest_distance",
+                    "suggest_tp_pct",
                     "score_plus",
                     "score_minus",
                     "win_prob",
@@ -382,62 +384,161 @@ class ShotStore:
 
 def _recommend_and_score(
     shots: list[dict[str, Any]],
-    tp_min: float,
     hold_ms: int,
     inside: float,
-) -> tuple[float, int, int, float]:
-    percents = sorted(float(x["percent"]) for x in shots if float(x.get("percent") or 0) > 0)
+    levels: list[float] | None = None,
+) -> tuple[float, int, int, float, float]:
+    """Подбирает дистанцию ордера и TP с максимальной суммарной прибылью.
+
+    Ордер на дистанции D заполняется, если прострел >= D. Сделка закрывается
+    по TP, если цена дошла до него за hold_ms, иначе по времени.
+    """
+    percents = [float(x.get("percent") or 0) for x in shots if float(x.get("percent") or 0) > 0]
     if not percents:
-        return 0.0, 0, 0, 0.0
-    typical = _percentile(percents, 50)
-    suggest = round(max(0.5, typical - inside), 2)
-    plus = 0
-    minus = 0
+        return 0.0, 0, 0, 0.0, 0.0
+    distances = _candidate_distances(shots, levels or [], inside)
+    if not distances:
+        return 0.0, 0, 0, 0.0, 0.0
+    tps = _candidate_tps()
+    best: tuple | None = None
+    for distance in distances:
+        fills: list[tuple[float, float]] = []
+        for shot in shots:
+            sim = _fill_mfe(shot, distance, hold_ms)
+            if sim is None:
+                continue
+            fills.append(sim)
+        if not fills:
+            continue
+        max_mfe = max(mfe for _time_pnl, mfe in fills)
+        tp_set = {tp for tp in tps if 0 < tp <= max_mfe + 1e-9}
+        for _time_pnl, mfe in fills:
+            hittable = math.floor(mfe * 100.0 + 1e-9) / 100.0
+            if hittable >= 0.05:
+                tp_set.add(round(hittable, 2))
+                tp_set.add(round(max(0.05, hittable - 0.01), 2))
+        options: list[float | None] = sorted(tp_set)
+        options.append(None)
+        for tp in options:
+            total = 0.0
+            plus = 0
+            hits = 0
+            for time_pnl, mfe in fills:
+                if tp is not None and mfe + 1e-12 >= tp:
+                    pnl = tp
+                    hits += 1
+                else:
+                    pnl = time_pnl
+                total += pnl
+                if pnl > 0:
+                    plus += 1
+            shown_tp = 0.0 if tp is None else tp
+            key = (round(total, 6), plus, hits, distance, shown_tp)
+            if _score_better(key, best):
+                best = key + (len(fills),)
+    if best is None:
+        typical = round(_percentile(sorted(percents), 50), 2)
+        return typical, 0, 0, 0.0, 0.0
+    _total, plus, _hits, distance, tp, filled = best
+    minus = filled - plus
+    prob = round(100.0 * plus / filled, 1) if filled else 0.0
+    return round(distance, 2), plus, minus, prob, round(tp, 2)
+
+
+def _score_better(key: tuple, best: tuple | None) -> bool:
+    if best is None:
+        return True
+    if abs(key[0] - best[0]) > 1e-6:
+        return key[0] > best[0]
+    if key[1] != best[1]:
+        return key[1] > best[1]
+    if key[2] != best[2]:
+        return key[2] > best[2]
+    return key[3] >= best[3]
+
+
+def _candidate_distances(
+    shots: list[dict[str, Any]],
+    levels: list[float],
+    inside: float,
+) -> list[float]:
+    dists: set[float] = set()
+    for level in levels:
+        if float(level) > 0:
+            dists.add(round(float(level), 2))
     for shot in shots:
-        outcome = _outcome_at(shot, suggest, tp_min, hold_ms)
-        if outcome == "plus":
-            plus += 1
-        elif outcome == "minus":
-            minus += 1
-    total = plus + minus
-    prob = round(100.0 * plus / total, 1) if total else 0.0
-    return suggest, plus, minus, prob
+        pct = float(shot.get("percent") or 0)
+        if pct < 0.5:
+            continue
+        dists.add(round(pct, 1))
+        dists.add(round(pct))
+        inner = round(max(0.5, pct - max(inside, 0.0)), 2)
+        dists.add(inner)
+    return sorted(d for d in dists if 0.5 <= d <= 20.0)
 
 
-def _outcome_at(shot: dict[str, Any], distance: float, tp_min: float, hold_ms: int) -> str:
+def _candidate_tps() -> list[float]:
+    return [round(step * 0.05, 2) for step in range(2, 41)]
+
+
+def _fill_mfe(shot: dict[str, Any], distance: float, hold_ms: int) -> tuple[float, float] | None:
+    """Возвращает (pnl по времени 0.3с, MFE %) после заполнения ордера на distance, либо None."""
     start = float(shot.get("start_price") or 0)
     pct = float(shot.get("percent") or 0)
     direction = str(shot.get("direction") or "").upper()
     if start <= 0 or distance <= 0 or pct + 1e-9 < distance:
-        return "skip"
+        return None
     fill_px = start * (1.0 - distance / 100.0) if direction == "DOWN" else start * (1.0 + distance / 100.0)
     path = shot.get("path") or []
+    start_ts = int(shot.get("start_ts") or 0)
     fill_ts = 0
     exit_px = fill_px
+    mfe = 0.0
     for pt in path:
         if not isinstance(pt, (list, tuple)) or len(pt) < 2:
             continue
         ts = float(pt[0])
         px = float(pt[1])
-        if fill_ts <= 0:
-            if direction == "DOWN" and px <= fill_px:
-                fill_ts = int(ts)
-            elif direction == "UP" and px >= fill_px:
-                fill_ts = int(ts)
+        if px <= 0:
             continue
-        if ts <= fill_ts + hold_ms:
-            exit_px = px
-        else:
+        if fill_ts <= 0:
+            if start_ts and ts + 1e-9 < start_ts:
+                continue
+            crossed = (direction == "DOWN" and px <= fill_px) or (direction == "UP" and px >= fill_px)
+            if crossed:
+                fill_ts = int(ts)
+                exit_px = px
+                mfe = max(mfe, _pnl_from_fill(direction, fill_px, px))
+            continue
+        if ts > fill_ts + hold_ms:
             break
-    if fill_ts <= 0:
-        if shot.get("vplus"):
-            return "plus"
-        return "minus"
+        exit_px = px
+        mfe = max(mfe, _pnl_from_fill(direction, fill_px, px))
+    if fill_ts > 0:
+        time_pnl = _pnl_from_fill(direction, fill_px, exit_px)
+        return time_pnl, max(mfe, time_pnl, 0.0)
+    for row in shot.get("distance_report") or []:
+        if abs(float(row.get("distance") or 0) - distance) > 1e-6:
+            continue
+        if not row.get("filled"):
+            return None
+        time_pnl = float(row.get("pnl_pct") or 0)
+        bounce = float(shot.get("rollback_pct") or 0)
+        return time_pnl, max(time_pnl, bounce, 0.0)
+    suggest = float(shot.get("suggest_distance") or 0)
+    if abs(suggest - distance) < 0.02:
+        time_pnl = float(shot.get("pnl_pct") or 0)
+        bounce = float(shot.get("rollback_pct") or 0)
+        return time_pnl, max(time_pnl, bounce, 0.0)
+    return None
+
+
+def _pnl_from_fill(direction: str, fill_px: float, px: float) -> float:
+    if fill_px <= 0:
+        return 0.0
     if direction == "DOWN":
-        pnl = (exit_px - fill_px) / fill_px * 100.0 if fill_px else 0.0
-    else:
-        pnl = (fill_px - exit_px) / fill_px * 100.0 if fill_px else 0.0
-    return "plus" if pnl + 1e-12 >= tp_min else "minus"
+        return (px - fill_px) / fill_px * 100.0
+    return (fill_px - px) / fill_px * 100.0
 
 
 def _best_distance(shots: list[dict[str, Any]], levels: list[float]) -> tuple[float, list[dict[str, Any]]]:

@@ -105,7 +105,7 @@
       width: 32px; height: 32px; border-radius: 8px; cursor: pointer; font-size: 18px;
     }
     .chart-canvas-wrap { padding: 0 8px 8px; background: #10141c; }
-    #chartCanvas { display: block; width: 100%; height: 520px; }
+    #chartCanvas { display: block; width: 100%; height: 560px; }
     #chartHint { padding: 8px 16px 12px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
     @media (max-width: 1100px) {
       .grid, .kpis, .mt-wrap, .mt-nums { grid-template-columns: 1fr; }
@@ -117,7 +117,7 @@
   <header>
     <div>
       <h1>Shot<span>Core</span> — разведка дистанций</h1>
-      <div class="meta" id="subtitle">Тики 0.5–0.7 с как в MoonTrader · рекомендация дистанции и счет +/-</div>
+      <div class="meta" id="subtitle">Рекомендация — дистанция с максимальным плюсом · TP — закрытие по тейку или через 0.3 с</div>
     </div>
     <div class="live"><span class="dot"></span><span id="live">ожидание данных</span></div>
   </header>
@@ -153,19 +153,20 @@
             <th>Плечо</th>
             <th>Прострелы</th>
             <th>Рекомендация</th>
+            <th>TP</th>
             <th>Счет+%</th>
             <th>Вер.</th>
             <th>Глубина p50 / p90</th>
             <th>Последний</th>
           </tr>
         </thead>
-        <tbody id="rows"><tr><td class="empty" colspan="8">Пока нет прострелов в выбранном окне</td></tr></tbody>
+        <tbody id="rows"><tr><td class="empty" colspan="9">Пока нет прострелов в выбранном окне</td></tr></tbody>
       </table>
     </section>
     <section class="panel feed" id="feed"></section>
   </div>
   <div class="note">
-    Клик по событию открывает отчёт как в MoonTrader: тики, фиолетовая линейка дистанции, зелёные входы по лимитам и синие выходы.
+    Клик по событию открывает тиковый график за 3 секунды: цена, объём под свечой (токены и USDT) и шкала времени. Рекомендация — дистанция, на которой виртуальные ордера дали максимум плюса. TP — процент от входа, при котором выгоднее закрывать по тейку, чем ждать 0.3 с.
   </div>
   <div class="mt-wrap">
     <section class="mt-box">
@@ -352,7 +353,7 @@
       const rows = (stats.rows || []).filter(r => !needle || r.symbol.toLowerCase().includes(needle));
       const body = document.getElementById("rows");
       if (!rows.length) {
-        body.innerHTML = `<tr><td class="empty" colspan="8">Нет прострелов в выбранном окне</td></tr>`;
+        body.innerHTML = `<tr><td class="empty" colspan="9">Нет прострелов в выбранном окне</td></tr>`;
       } else {
         body.innerHTML = rows.map(r => `
           <tr class="clickable" data-symbol="${r.symbol}" data-ts="${r.last_ts || 0}">
@@ -360,6 +361,7 @@
             <td class="amber">${lever(r.lever)}</td>
             <td>${r.count} <span class="down">${r.count_down}</span>/<span class="up">${r.count_up}</span></td>
             <td class="amber">${fmt(r.suggest_distance)}%</td>
+            <td class="amber">${r.suggest_tp_pct > 0 ? fmt(r.suggest_tp_pct) + "%" : "—"}</td>
             <td class="amber">${r.score_text || "0/0"}</td>
             <td>${fmt(r.win_prob || 0, 0)}%</td>
             <td>${fmt(r.p50)} / ${fmt(r.p90)}</td>

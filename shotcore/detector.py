@@ -154,7 +154,7 @@ class SymbolDetector:
             timed_out = ts - opened.start_ts >= self.max_shot_ms
             if not quiet and not timed_out:
                 continue
-            event = self._finish(opened, ts, price, metrics)
+            event = self._finish(opened, price, metrics)
             self._drop(direction, ts)
             if event is not None:
                 closed.append(event)
@@ -167,7 +167,6 @@ class SymbolDetector:
     def _finish(
         self,
         opened: _OpenShot,
-        ts: int,
         last_price: float,
         metrics: dict[int, tuple[float, float, float, int, float]],
     ) -> ShotEvent | None:
@@ -180,7 +179,6 @@ class SymbolDetector:
             else:
                 extras[window_ms] = (high - ref) / ref * 100.0
         report, suggest, pnl, vplus, exit_price, rollback, fill_ts, fill_price = self._simulate(opened, last_price)
-        tape_end = (fill_ts + self.hold_ms) if fill_ts else ts
         return ShotEvent(
             symbol=self.symbol,
             direction=opened.direction,
@@ -208,7 +206,7 @@ class SymbolDetector:
             distance_report=report,
             fill_ts=fill_ts,
             fill_price=fill_price,
-            path=self._tick_tape(opened.start_ts, max(tape_end, opened.peak_ts)),
+            path=self._tick_tape(opened.start_ts),
         )
 
     def _simulate(
@@ -295,11 +293,12 @@ class SymbolDetector:
                 best_px = last_price
         return best_pnl, best_px, best_ts
 
-    def _tick_tape(self, start_ts: int, end_ts: int) -> list[list[float]]:
-        pad_before = 1500
-        pad_after = 2000
-        lo = start_ts - pad_before
-        hi = end_ts + pad_after
+    def _tick_tape(self, start_ts: int, end_ts: int | None = None) -> list[list[float]]:
+        # Ровно 3 секунды вокруг прострела: чуть до старта и остаток после.
+        lo = int(start_ts) - 200
+        hi = lo + 3000
+        if end_ts is not None:
+            hi = max(hi, int(end_ts))
         out: list[list[float]] = []
         for trade in self.trades:
             if trade.ts < lo:

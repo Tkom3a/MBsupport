@@ -165,17 +165,17 @@ async def _chart(request: web.Request) -> web.Response:
             "percent": 0,
             "direction": "",
         }
-        bar = "1s"
+        path = (shot_row or {}).get("path") or []
         candles: list[dict[str, Any]] = []
-        if core._session is not None:
+        if len(path) < 5 and core._session is not None:
             rest = OkxRest(core.cfg, core._session)
             try:
-                bar, candles = await rest.fetch_candles_around(symbol, ts)
+                _bar, candles = await rest.fetch_candles_around(symbol, ts)
             except Exception:
-                bar, candles = "1s", []
+                candles = []
         payload = {"bar": "tick", "candles": candles, "shot": shot}
         if shot_row:
-            payload["shot"]["path"] = shot_row.get("path") or []
+            payload["shot"]["path"] = path
             payload["shot"]["distance_report"] = shot_row.get("distance_report") or []
         if candles or payload["shot"].get("path"):
             _chart_cache[key] = (time.monotonic(), payload)
