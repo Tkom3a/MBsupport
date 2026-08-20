@@ -206,6 +206,7 @@ sudo systemctl restart shotcore    # если стоит unit
 | `/` | Активные рынки как в MT, пары с прострелами, дистанция, плечо, лента |
 | `/api/status` | Сколько пар в подписке, фильтры |
 | `/api/stats` | JSON статистики |
+| `/api/mt-plan` | JSON для ядра MT: пара, рекомендация, TP, run_hours |
 | `/health` | `ok` для healthcheck |
 
 **Дистанция ордера** — уровень из `DISTANCE_LEVELS`, на котором симуляция «лимит → выход через 0.3 с» чаще в плюсе. Это значение ставьте в Distance алгоритма Shot. **Глубина p50/p90** — насколько реально улетал прострел. **Плечо** — максимальное доступное на паре (x20…x100).
@@ -220,6 +221,8 @@ sudo systemctl restart shotcore    # если стоит unit
 data/shots.csv              все события
 data/shots.jsonl            то же, по строке на событие
 data/distance_hints.csv     сводка: suggest_distance, vplus_rate, avg_pnl
+data/mt_plan.json           снимок для MT: пара, рекомендация, TP
+data/mt_plan.csv            то же построчно
 logs/shotcore.log           лог ядра
 ```
 
@@ -227,7 +230,27 @@ logs/shotcore.log           лог ядра
 
 ---
 
-## 7. Типичные проблемы
+## 7. Запуск алгоритмов в MoonTrader
+
+На **другом сервере** (где стоит MTCore) лежит папка `mt_launcher/`. Скрипт качает `http://IP-ShotCore:4861/api/mt-plan` и пишет Shot Group в папку **MBsupport**: Distance = рекомендация, TP из плана, **Order size = 10 USDT уже с плечом**, фильтр макс. плеча пары (x20/x50). Для каждой пары создаётся мастер и **клон на 3 часа** — время считает MTCore, Python не ждёт.
+
+Краткая последовательность:
+
+```bash
+cd mt_launcher
+cp .env.example .env
+nano .env          # SHOTCORE_URL, MT_PROFILE=okxoma, MARGIN_USDT=10
+python3 launcher.py inspect
+python3 launcher.py plan
+python3 launcher.py apply --dry-run
+python3 launcher.py run
+```
+
+После записи перезапустите `./MTCore`. Полная инструкция: [`mt_launcher/README.md`](mt_launcher/README.md).
+
+---
+
+## 8. Типичные проблемы
 
 **Страница не открывается с другого ПК**  
 В `.env` должно быть `WEB_HOST=0.0.0.0`. Проверь фаервол: `sudo ufw allow 4861/tcp`.
@@ -246,7 +269,7 @@ logs/shotcore.log           лог ядра
 
 ---
 
-## 8. Структура репозитория
+## 9. Структура репозитория
 
 ```
 Dockerfile
@@ -256,6 +279,7 @@ config.yaml              запасные значения, если ключа 
 requirements.txt
 shotcore.service         unit для Linux без Docker
 shotcore/                код ядра и web/
+mt_launcher/             скрипт: план ShotCore → алгоритмы MoonTrader
 ```
 
 Файл `.env` в git не коммитится.

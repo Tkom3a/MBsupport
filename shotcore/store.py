@@ -8,6 +8,7 @@ import statistics
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
+from io import StringIO
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -57,12 +58,17 @@ class ShotStore:
         tp_min_pct: float = 0.3,
         hold_ms: int = 300,
         suggest_inside_pct: float = 0.05,
+        mt_plan_name: str = "mt_plan.json",
+        mt_run_hours: float = 3.0,
     ):
         self.directory = directory
         self.directory.mkdir(parents=True, exist_ok=True)
         self.csv_path = self.directory / csv_name
         self.jsonl_path = self.directory / jsonl_name
         self.hints_path = self.directory / hints_name
+        self.mt_plan_path = self.directory / mt_plan_name
+        self.mt_plan_csv_path = self.mt_plan_path.with_suffix(".csv")
+        self.mt_run_hours = max(float(mt_run_hours), 0.1)
         self.tz = _zone(tz_name)
         self.distance_levels = distance_levels or [1.11, 1.32, 1.42, 1.63, 1.78]
         self.retain_hours = max(1, int(retain_hours))
@@ -196,8 +202,18 @@ class ShotStore:
         )
         return stored or row
 
-    def recent(self, limit: int = 80, lookback_min: int = 0, direction: str = "", only_btc_calm: bool = False) -> list[dict[str, Any]]:
+    def recent(
+        self,
+        limit: int = 80,
+        lookback_min: int = 0,
+        direction: str = "",
+        only_btc_calm: bool = False,
+        symbol: str = "",
+    ) -> list[dict[str, Any]]:
         items = self._filtered(lookback_min, direction, only_btc_calm)
+        needle = str(symbol or "").strip().upper()
+        if needle:
+            items = [item for item in items if needle in str(item.get("symbol") or "").upper()]
         items = items[-limit:]
         items.reverse()
         return [_public_event(item, self.tz) for item in items]
@@ -266,7 +282,12 @@ class ShotStore:
             "rows": rows,
         }
 
-    def write_hints(self, lookback_min: int = 0) -> None:
+    def write_hints(
+        self,
+        lookback_min: int = 0,
+        subscribed: set[str] | None = None,
+        run_hours: float | None = None,
+    ) -> None:
         payload = self.stats(lookback_min=lookback_min)
         with self.hints_path.open("w", newline="", encoding="utf-8") as fh:
             writer = csv.DictWriter(
@@ -291,6 +312,105 @@ class ShotStore:
             writer.writeheader()
             for row in payload["rows"]:
                 writer.writerow({key: row[key] for key in writer.fieldnames})
+        self.write_mt_plan(payload, subscribed=subscribed, run_hours=run_hours)
+
+    def build_mt_plan(
+        self,
+        lookback_min: int = 0,
+        subscribed: set[str] | None = None,
+        run_hours: float | None = None,
+        stats_payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = stats_payload or self.stats(lookback_min=lookback_min)
+        hours = max(float(run_hours if run_hours is not None else self.mt_run_hours), 0.1)
+        hold_ms = int(payload.get("hold_ms") or self.hold_ms)
+        now = datetime.now(tz=timezone.utc)
+        active = {str(x) for x in (subscribed or [])}
+        pairs = []
+        for row in payload.get("rows") or []:
+            recommend = round(float(row.get("suggest_distance") or 0), 4)
+            if recommend <= 0:
+                continue
+            symbol = str(row.get("symbol") or "")
+            if not symbol:
+                continue
+            tp = round(float(row.get("suggest_tp_pct") or 0), 4)
+            pairs.append(
+                {
+                    "symbol": symbol,
+                    "base": symbol.split("-")[0],
+                    "recommend_pct": recommend,
+                    "tp_pct": tp,
+                    "hold_ms": hold_ms,
+                    "run_hours": hours,
+                    "lever": round(float(row.get("lever") or 0), 1),
+                    "subscribed": symbol in active if active else False,
+                    "count": int(row.get("count") or 0),
+                    "score_plus": int(row.get("score_plus") or 0),
+                    "score_minus": int(row.get("score_minus") or 0),
+                    "win_prob": float(row.get("win_prob") or 0),
+                }
+            )
+        return {
+            "schema": "shotcore.mt_plan.v1",
+            "updated_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "updated_ts": int(now.timestamp() * 1000),
+            "run_hours": hours,
+            "hold_ms": hold_ms,
+            "lookback_min": int(payload.get("lookback_min") or lookback_min or 0),
+            "pairs": pairs,
+        }
+
+    def write_mt_plan(
+        self,
+        stats_payload: dict[str, Any] | None = None,
+        subscribed: set[str] | None = None,
+        run_hours: float | None = None,
+        lookback_min: int = 0,
+    ) -> dict[str, Any]:
+        plan = self.build_mt_plan(
+            lookback_min=lookback_min,
+            subscribed=subscribed,
+            run_hours=run_hours,
+            stats_payload=stats_payload,
+        )
+        _atomic_write(self.mt_plan_path, json.dumps(plan, ensure_ascii=False, indent=2) + "\n")
+        fields = [
+            "symbol",
+            "base",
+            "recommend_pct",
+            "tp_pct",
+            "hold_ms",
+            "run_hours",
+            "lever",
+            "subscribed",
+            "count",
+            "win_prob",
+            "updated_utc",
+        ]
+        stream = StringIO()
+        csv_writer = csv.DictWriter(stream, fieldnames=fields, lineterminator="\n")
+        csv_writer.writeheader()
+        updated = plan["updated_utc"]
+        for pair in plan["pairs"]:
+            csv_writer.writerow(
+                {
+                    "symbol": pair["symbol"],
+                    "base": pair["base"],
+                    "recommend_pct": pair["recommend_pct"],
+                    "tp_pct": pair["tp_pct"],
+                    "hold_ms": pair["hold_ms"],
+                    "run_hours": pair["run_hours"],
+                    "lever": pair["lever"],
+                    "subscribed": int(bool(pair["subscribed"])),
+                    "count": pair["count"],
+                    "win_prob": pair["win_prob"],
+                    "updated_utc": updated,
+                }
+            )
+        _atomic_write(self.mt_plan_csv_path, stream.getvalue())
+        log.info("MT plan: %s pairs -> %s", len(plan["pairs"]), self.mt_plan_path.name)
+        return plan
 
     def _filtered(self, lookback_min: int, direction: str = "", only_btc_calm: bool = False) -> list[dict[str, Any]]:
         cutoff = 0
@@ -380,6 +500,12 @@ class ShotStore:
                     + "\n"
                 )
         tmp_jsonl.replace(self.jsonl_path)
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
 
 
 def _recommend_and_score(

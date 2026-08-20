@@ -60,7 +60,7 @@ class ActiveMarketsConfig:
     ignore_first: int = 2
     sort_sec: int = 15
     filter_1h_delta: bool = True
-    filter_15m_open_delta: bool = True
+    filter_15m_open_delta: bool = False
 
 
 @dataclass
@@ -92,6 +92,8 @@ class OutputConfig:
     csv_name: str = "shots.csv"
     jsonl_name: str = "shots.jsonl"
     hints_name: str = "distance_hints.csv"
+    mt_plan_name: str = "mt_plan.json"
+    mt_run_hours: float = 3.0
     retain_hours: int = 48
     cleanup_sec: int = 3600
 
@@ -155,6 +157,13 @@ def _as_floats(name: str, default: list[float]) -> list[float]:
     if not parts:
         return default
     return [float(part) for part in parts]
+
+
+def _as_bool(name: str, default: bool) -> bool:
+    raw = _env(name).lower()
+    if raw == "":
+        return default
+    return raw in {"1", "true", "yes", "on"}
 
 
 def load_dotenv_files(root: Path) -> None:
@@ -241,6 +250,10 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     if _env_filled("ACTIVE_SORT_SEC"):
         active.sort_sec = _as_int("ACTIVE_SORT_SEC", active.sort_sec)
         market.refresh_sec = active.sort_sec
+    if _env_filled("ACTIVE_FILTER_1H"):
+        active.filter_1h_delta = _as_bool("ACTIVE_FILTER_1H", active.filter_1h_delta)
+    if _env_filled("ACTIVE_FILTER_15M"):
+        active.filter_15m_open_delta = _as_bool("ACTIVE_FILTER_15M", active.filter_15m_open_delta)
     if _env_filled("DISTANCE_LEVELS"):
         shot.distance_levels = _as_floats("DISTANCE_LEVELS", shot.distance_levels)
     if _env_filled("VPLUS_MIN_PNL"):
@@ -280,6 +293,10 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         output.retain_hours = max(1, _as_int("RETENTION_HOURS", output.retain_hours))
     if _env_filled("RETENTION_CLEANUP_SEC"):
         output.cleanup_sec = max(300, _as_int("RETENTION_CLEANUP_SEC", output.cleanup_sec))
+    if _env_filled("MT_PLAN_NAME"):
+        output.mt_plan_name = _env("MT_PLAN_NAME")
+    if _env_filled("MT_RUN_HOURS"):
+        output.mt_run_hours = max(0.1, _as_float("MT_RUN_HOURS", output.mt_run_hours))
 
     return AppConfig(
         exchange=exchange,
@@ -317,6 +334,8 @@ def public_filters(cfg: AppConfig) -> dict[str, Any]:
         "hold_ms": cfg.shot.hold_ms,
         "tp_min_pct": cfg.shot.tp_min_pct,
         "suggest_inside_pct": cfg.shot.suggest_inside_pct,
+        "mt_run_hours": cfg.output.mt_run_hours,
+        "mt_plan_name": cfg.output.mt_plan_name,
         "distance_levels": cfg.shot.distance_levels,
         "vplus_min_pnl": cfg.shot.vplus_min_pnl,
         "btc_window_sec": cfg.btc_filter.window_sec,

@@ -42,14 +42,14 @@ shot:
   tp_min_pct: 0.3
   suggest_inside_pct: 0.05
 
-# Как «Фильтр активных рынков» в MoonTrader: 1ч Δ + 15м оΔ,
-# сортировка каждые 15 с, выкинуть первые 2, взять 25.
+# Фильтр активных рынков: только 1ч Δ (самые волатильные за час).
+# 15м оΔ выключена и в сортировку не входит.
 active:
   max_markets: 25
   ignore_first: 2
   sort_sec: 15
   filter_1h_delta: true
-  filter_15m_open_delta: true
+  filter_15m_open_delta: false
 
 # Как deltaFilterList в MT: BTC-USDT-SWAP, 60с, ±0.6%.
 # Ядро пишет ВСЕ прострелы, поле btc_calm показывает, прошёл бы фильтр MT.
@@ -63,6 +63,8 @@ output:
   csv_name: shots.csv
   jsonl_name: shots.jsonl
   hints_name: distance_hints.csv
+  mt_plan_name: mt_plan.json
+  mt_run_hours: 3
   retain_hours: 48
   cleanup_sec: 3600
 

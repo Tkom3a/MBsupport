@@ -29,6 +29,7 @@ def build_app(core: ShotCore) -> web.Application:
     app.router.add_get("/api/stats", _stats)
     app.router.add_get("/api/shots", _shots)
     app.router.add_get("/api/chart", _chart)
+    app.router.add_get("/api/mt-plan", _mt_plan)
     if WEB_DIR.is_dir():
         app.router.add_static("/static", WEB_DIR)
     return app
@@ -132,7 +133,18 @@ async def _shots(request: web.Request) -> web.Response:
     limit = min(_int(request, "limit", 80), 300)
     direction = str(request.rel_url.query.get("direction") or "")
     only_calm = str(request.rel_url.query.get("btc_calm") or "") in {"1", "true"}
-    return _json({"shots": core.store.recent(limit=limit, lookback_min=lookback, direction=direction, only_btc_calm=only_calm)})
+    symbol = str(request.rel_url.query.get("symbol") or "").strip()
+    return _json(
+        {
+            "shots": core.store.recent(
+                limit=limit,
+                lookback_min=lookback,
+                direction=direction,
+                only_btc_calm=only_calm,
+                symbol=symbol,
+            )
+        }
+    )
 
 
 def _get_chart_lock() -> asyncio.Lock:
@@ -184,6 +196,16 @@ async def _chart(request: web.Request) -> web.Response:
                 for drop, _value in oldest:
                     _chart_cache.pop(drop, None)
         return _json(payload)
+
+
+async def _mt_plan(request: web.Request) -> web.Response:
+    core: ShotCore = request.app["core"]
+    plan = core.store.build_mt_plan(
+        lookback_min=core.cfg.web.stats_lookback_min,
+        subscribed=set(core.active_symbols),
+        run_hours=core.cfg.output.mt_run_hours,
+    )
+    return _json(plan)
 
 
 def _int(request: web.Request, name: str, default: int) -> int:

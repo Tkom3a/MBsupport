@@ -37,6 +37,8 @@ class ShotCore:
             tp_min_pct=cfg.shot.tp_min_pct,
             hold_ms=cfg.shot.hold_ms,
             suggest_inside_pct=cfg.shot.suggest_inside_pct,
+            mt_plan_name=cfg.output.mt_plan_name,
+            mt_run_hours=cfg.output.mt_run_hours,
         )
         self.btc = BtcDeltaTracker(
             cfg.btc_filter.symbol,
@@ -186,7 +188,11 @@ class ShotCore:
                     try:
                         await self.refresh_universe()
                         if self.store.total:
-                            self.store.write_hints(self.cfg.web.stats_lookback_min)
+                            self.store.write_hints(
+                                self.cfg.web.stats_lookback_min,
+                                subscribed=set(self.active_symbols),
+                                run_hours=self.cfg.output.mt_run_hours,
+                            )
                     except Exception as exc:
                         log.warning("Universe refresh failed: %s", exc)
                     await asyncio.sleep(self.cfg.active.sort_sec)
@@ -196,7 +202,11 @@ class ShotCore:
                 await self.feed.stop()
                 await runner.cleanup()
                 if self.store.total:
-                    self.store.write_hints(self.cfg.web.stats_lookback_min)
+                    self.store.write_hints(
+                        self.cfg.web.stats_lookback_min,
+                        subscribed=set(self.active_symbols),
+                        run_hours=self.cfg.output.mt_run_hours,
+                    )
 
     async def _start_web(self) -> web.AppRunner:
         app = build_app(self)

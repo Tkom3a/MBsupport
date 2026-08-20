@@ -7,3 +7,6 @@ logs/
 _tmp_*.py
 .env
 *.log
+mt_launcher/.env
+mt_launcher/state.json
+mt_launcher/*.bak*

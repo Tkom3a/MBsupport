@@ -103,7 +103,7 @@ async def rank_active_markets(
 
     scored = await asyncio.gather(*[_one(inst) for inst in instruments])
     ranked = list(scored)
-    ranked.sort(key=lambda item: (item.delta_1h, abs(item.open_delta_15m)), reverse=True)
+    ranked.sort(key=lambda item: _rank_key(item, cfg), reverse=True)
     ignore_first = max(0, cfg.ignore_first)
     max_markets = max(0, cfg.max_markets)
     board: list[ActiveMarket] = []
@@ -147,3 +147,14 @@ def board_from_qav(instruments: list[Instrument], cfg: ActiveMarketsConfig) -> l
             break
         board.append(item)
     return board
+
+
+def _rank_key(item: ActiveMarket, cfg: ActiveMarketsConfig) -> tuple:
+    parts: list[float] = []
+    if cfg.filter_1h_delta:
+        parts.append(item.delta_1h)
+    if cfg.filter_15m_open_delta:
+        parts.append(abs(item.open_delta_15m))
+    if not parts:
+        parts.append(item.qav_24h)
+    return tuple(parts)
