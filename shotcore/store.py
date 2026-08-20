@@ -516,10 +516,11 @@ def _recommend_and_score(
     inside: float,
     levels: list[float] | None = None,
 ) -> tuple[float, int, int, float, float]:
-    """Подбирает дистанцию ордера и TP с максимальной суммарной прибылью.
+    """По всей массе прострелов пары выбирает D и TP с максимальной суммой PnL.
 
-    Ордер на дистанции D заполняется, если прострел >= D. Сделка закрывается
-    по TP, если цена дошла до него за hold_ms, иначе по времени.
+    Ордер на D заполняется, если глубина прострела >= D (1% не наполняет 5%,
+    а 10% наполняет и 1%, и 5%, и 10%). Закрытие: TP если цена дошла до него
+    за hold_ms после входа, иначе выход по времени.
     """
     percents = [float(x.get("percent") or 0) for x in shots if float(x.get("percent") or 0) > 0]
     if not percents:
@@ -527,12 +528,13 @@ def _recommend_and_score(
     distances = _candidate_distances(shots, levels or [], inside)
     if not distances:
         return 0.0, 0, 0, 0.0, 0.0
+    indexed = [(shot, _report_map(shot)) for shot in shots]
     tps = _candidate_tps()
     best: tuple | None = None
     for distance in distances:
         fills: list[tuple[float, float]] = []
-        for shot in shots:
-            sim = _fill_mfe(shot, distance, hold_ms)
+        for shot, report in indexed:
+            sim = _fill_mfe(shot, distance, hold_ms, report)
             if sim is None:
                 continue
             fills.append(sim)
@@ -561,13 +563,12 @@ def _recommend_and_score(
                 if pnl > 0:
                     plus += 1
             shown_tp = 0.0 if tp is None else tp
-            key = (round(total, 6), plus, hits, distance, shown_tp)
+            key = (round(total, 6), plus, hits, len(fills), distance, shown_tp)
             if _score_better(key, best):
                 best = key + (len(fills),)
     if best is None:
-        typical = round(_percentile(sorted(percents), 50), 2)
-        return typical, 0, 0, 0.0, 0.0
-    _total, plus, _hits, distance, tp, filled = best
+        return 0.0, 0, 0, 0.0, 0.0
+    _total, plus, _hits, _nfills, distance, tp, filled = best
     minus = filled - plus
     prob = round(100.0 * plus / filled, 1) if filled else 0.0
     return round(distance, 2), plus, minus, prob, round(tp, 2)
@@ -582,7 +583,9 @@ def _score_better(key: tuple, best: tuple | None) -> bool:
         return key[1] > best[1]
     if key[2] != best[2]:
         return key[2] > best[2]
-    return key[3] >= best[3]
+    if key[3] != best[3]:
+        return key[3] > best[3]
+    return key[4] >= best[4]
 
 
 def _candidate_distances(
@@ -590,18 +593,19 @@ def _candidate_distances(
     levels: list[float],
     inside: float,
 ) -> list[float]:
-    dists: set[float] = set()
-    for level in levels:
-        if float(level) > 0:
-            dists.add(round(float(level), 2))
-    for shot in shots:
-        pct = float(shot.get("percent") or 0)
-        if pct < 0.5:
-            continue
-        dists.add(round(pct, 1))
-        dists.add(round(pct))
-        inner = round(max(0.5, pct - max(inside, 0.0)), 2)
-        dists.add(inner)
+    dists: set[float] = {round(float(level), 2) for level in levels if float(level) > 0}
+    percents = [float(shot.get("percent") or 0) for shot in shots]
+    percents = [pct for pct in percents if pct >= 0.5]
+    if not percents:
+        return sorted(d for d in dists if 0.5 <= d <= 20.0)
+    hi = min(20.0, max(percents))
+    for pct in percents:
+        dists.add(round(pct, 2))
+        dists.add(round(max(0.5, pct - max(inside, 0.0)), 2))
+    cursor = 0.50
+    while cursor <= hi + 1e-9:
+        dists.add(round(cursor, 2))
+        cursor = round(cursor + (0.10 if cursor >= 3.99 else 0.05), 2)
     return sorted(d for d in dists if 0.5 <= d <= 20.0)
 
 
@@ -609,60 +613,84 @@ def _candidate_tps() -> list[float]:
     return [round(step * 0.05, 2) for step in range(2, 41)]
 
 
-def _fill_mfe(shot: dict[str, Any], distance: float, _hold_ms: int) -> tuple[float, float] | None:
-    """Возвращает (pnl по времени 0.3с, MFE %) после заполнения ордера на distance, либо None."""
+def _report_map(shot: dict[str, Any]) -> dict[float, dict[str, Any]]:
+    out: dict[float, dict[str, Any]] = {}
+    for row in shot.get("distance_report") or []:
+        distance = round(float(row.get("distance") or 0), 2)
+        if distance > 0:
+            out[distance] = row
+    return out
+
+
+def _nearest_report(report: dict[float, dict[str, Any]], distance: float) -> dict[str, Any] | None:
+    if not report:
+        return None
+    want = round(distance, 2)
+    exact = report.get(want)
+    if exact is not None:
+        return exact
+    nearest = min(report, key=lambda item: abs(item - want))
+    if abs(nearest - want) <= 0.051:
+        return report[nearest]
+    return None
+
+
+def _fill_mfe(
+    shot: dict[str, Any],
+    distance: float,
+    hold_ms: int,
+    report: dict[float, dict[str, Any]] | None = None,
+) -> tuple[float, float] | None:
+    """(pnl за 0.3с, MFE за 0.3с после входа). None = ордер не исполнился."""
     start = float(shot.get("start_price") or 0)
     pct = float(shot.get("percent") or 0)
     if start <= 0 or distance <= 0 or pct + 1e-9 < distance:
         return None
-    for row in shot.get("distance_report") or []:
-        if abs(float(row.get("distance") or 0) - distance) > 1e-6:
-            continue
+    row = _nearest_report(report if report is not None else _report_map(shot), distance)
+    if row is not None:
         if not row.get("filled"):
             return None
         time_pnl = float(row.get("pnl_pct") or 0)
-        bounce = float(shot.get("rollback_pct") or 0)
-        return time_pnl, max(time_pnl, bounce, 0.0)
-    suggest = float(shot.get("suggest_distance") or 0)
-    if abs(suggest - distance) < 0.02:
-        time_pnl = float(shot.get("pnl_pct") or 0)
-        bounce = float(shot.get("rollback_pct") or 0)
-        return time_pnl, max(time_pnl, bounce, 0.0)
-    return None
+        mfe = float(row.get("mfe_pct") or 0)
+        return time_pnl, max(mfe, time_pnl, 0.0)
+    time_pnl = _estimate_hold_pnl(shot, distance, hold_ms)
+    return time_pnl, max(time_pnl, 0.0)
 
 
-def _best_distance(shots: list[dict[str, Any]], levels: list[float]) -> tuple[float, list[dict[str, Any]]]:
-    stats: list[dict[str, Any]] = []
-    for distance in levels:
-        filled = 0
-        vplus = 0
-        pnls: list[float] = []
-        for shot in shots:
-            for row in shot.get("distance_report") or []:
-                if abs(float(row.get("distance") or 0) - distance) > 1e-6:
-                    continue
-                if row.get("filled"):
-                    filled += 1
-                    pnls.append(float(row.get("pnl_pct") or 0))
-                    if row.get("vplus"):
-                        vplus += 1
-                break
-        rate = 100.0 * vplus / filled if filled else 0.0
-        stats.append(
-            {
-                "distance": distance,
-                "filled": filled,
-                "vplus": vplus,
-                "vplus_rate": round(rate, 1),
-                "avg_pnl": round(statistics.fmean(pnls), 4) if pnls else 0.0,
-            }
-        )
-    ranked = [row for row in stats if row["filled"] > 0]
-    if ranked:
-        best = max(ranked, key=lambda row: (row["vplus_rate"], row["avg_pnl"], row["distance"]))
-        return best["distance"], stats
-    percents = sorted(float(x["percent"]) for x in shots)
-    return round(_percentile(percents, 50) * 0.85, 2), stats
+def _estimate_hold_pnl(shot: dict[str, Any], distance: float, hold_ms: int) -> float:
+    """Оценка выхода через 0.3 с, если по D нет тиковой симуляции (старые записи)."""
+    start = float(shot.get("start_price") or 0)
+    pct = float(shot.get("percent") or 0)
+    direction = str(shot.get("direction") or "").upper()
+    if start <= 0 or pct <= 0:
+        return 0.0
+    fill_px = start * (1.0 - distance / 100.0) if direction == "DOWN" else start * (1.0 + distance / 100.0)
+    duration = max(int(shot.get("duration_ms") or 0), 1)
+    hold = max(int(hold_ms or 300), 1)
+    t_to_peak = duration * max(0.0, (pct - distance) / pct)
+    if hold <= t_to_peak:
+        extra = (pct - distance) * (hold / t_to_peak) if t_to_peak > 0 else 0.0
+        moved = distance + extra
+        hold_px = start * (1.0 - moved / 100.0) if direction == "DOWN" else start * (1.0 + moved / 100.0)
+        return _pnl_from_fill(direction, fill_px, hold_px)
+    extreme = float(shot.get("extreme_price") or 0)
+    if extreme <= 0:
+        extreme = start * (1.0 - pct / 100.0) if direction == "DOWN" else start * (1.0 + pct / 100.0)
+    frac = min(1.0, (hold - t_to_peak) / float(hold))
+    bounce = float(shot.get("rollback_pct") or 0) * frac
+    if direction == "DOWN":
+        hold_px = extreme + bounce / 100.0 * start
+    else:
+        hold_px = extreme - bounce / 100.0 * start
+    return _pnl_from_fill(direction, fill_px, hold_px)
+
+
+def _pnl_from_fill(direction: str, fill_px: float, px: float) -> float:
+    if fill_px <= 0 or px <= 0:
+        return 0.0
+    if direction == "DOWN":
+        return (px - fill_px) / fill_px * 100.0
+    return (fill_px - px) / fill_px * 100.0
 
 
 def _cutoff_ms(retain_hours: int) -> int:

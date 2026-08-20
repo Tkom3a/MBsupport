@@ -211,13 +211,14 @@ class SymbolDetector:
         self, opened: _OpenShot, last_price: float
     ) -> tuple[list[dict[str, Any]], float, float, bool, float, float, int, float]:
         rollback = self._bounce_from_extreme(opened, last_price)
-        levels = sorted({round(x, 4) for x in self.distance_levels if x > 0})
-        report: list[dict[str, Any]] = []
-        for distance in levels:
-            report.append(self._simulate_distance(opened, distance, last_price))
         suggest = round(max(0.01, opened.peak_pct - self.suggest_inside_pct), 2)
-        chosen = self._simulate_distance(opened, suggest, last_price)
-        if not any(abs(float(row["distance"]) - suggest) < 1e-6 for row in report):
+        report = [
+            self._simulate_distance(opened, distance, last_price)
+            for distance in self._distances_to_sim(opened.peak_pct)
+        ]
+        chosen = next((row for row in report if abs(float(row["distance"]) - suggest) < 1e-6), None)
+        if chosen is None:
+            chosen = self._simulate_distance(opened, suggest, last_price)
             report.append(chosen)
         return (
             report,
@@ -230,27 +231,71 @@ class SymbolDetector:
             float(chosen.get("fill_price") or 0),
         )
 
+    def _distances_to_sim(self, peak_pct: float) -> list[float]:
+        peak = min(max(float(peak_pct), 0.0), 20.0)
+        dists: set[float] = set()
+        for level in self.distance_levels:
+            value = round(float(level), 2)
+            if 0.5 <= value <= peak + 1e-9:
+                dists.add(value)
+        suggest = round(max(0.5, peak - self.suggest_inside_pct), 2)
+        if suggest <= 20.0:
+            dists.add(suggest)
+        cursor = 0.50
+        while cursor <= peak + 1e-9:
+            dists.add(round(cursor, 2))
+            cursor = round(cursor + (0.10 if cursor >= 3.99 else 0.05), 2)
+            if len(dists) >= 100:
+                dists.add(round(peak, 2))
+                break
+        return sorted(dists)
+
     def _simulate_distance(self, opened: _OpenShot, distance: float, last_price: float) -> dict[str, Any]:
+        empty = {
+            "distance": distance,
+            "filled": False,
+            "vplus": False,
+            "pnl_pct": 0.0,
+            "mfe_pct": 0.0,
+            "exit_price": 0.0,
+            "fill_ts": 0,
+            "fill_price": 0.0,
+        }
         if opened.peak_pct + 1e-9 < distance or opened.start_price <= 0:
-            return {"distance": distance, "filled": False, "vplus": False, "pnl_pct": 0.0, "exit_price": 0.0, "fill_ts": 0, "fill_price": 0.0}
+            return empty
         if opened.direction == "DOWN":
             fill_px = opened.start_price * (1.0 - distance / 100.0)
         else:
             fill_px = opened.start_price * (1.0 + distance / 100.0)
         fill_ts = self._first_cross(opened.start_ts, opened.direction, fill_px)
         if fill_ts is None:
-            return {"distance": distance, "filled": False, "vplus": False, "pnl_pct": 0.0, "exit_price": 0.0, "fill_ts": 0, "fill_price": 0.0}
-        hold_px = self._price_at(fill_ts + self.hold_ms, last_price)
+            return empty
+        hold_end = fill_ts + self.hold_ms
+        hold_px = self._price_at(hold_end, last_price)
         pnl = self._pnl_pct(opened.direction, fill_px, hold_px)
+        mfe = self._mfe_until(fill_ts, hold_end, fill_px, opened.direction)
         return {
             "distance": distance,
             "filled": True,
             "vplus": pnl + 1e-12 >= self.tp_min_pct,
             "pnl_pct": round(pnl, 4),
+            "mfe_pct": round(max(mfe, pnl, 0.0), 4),
             "exit_price": hold_px,
             "fill_ts": fill_ts,
             "fill_price": fill_px,
         }
+
+    def _mfe_until(self, fill_ts: int, end_ts: int, fill_px: float, direction: str) -> float:
+        best = 0.0
+        for trade in self.trades:
+            if trade.ts < fill_ts:
+                continue
+            if trade.ts > end_ts:
+                break
+            pnl = self._pnl_pct(direction, fill_px, trade.price)
+            if pnl > best:
+                best = pnl
+        return best
 
     def _bounce_from_extreme(self, opened: _OpenShot, last_price: float) -> float:
         if opened.start_price <= 0:
