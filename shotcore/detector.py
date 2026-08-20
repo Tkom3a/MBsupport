@@ -42,7 +42,6 @@ class ShotEvent:
     lever: float = 0.0
     fill_ts: int = 0
     fill_price: float = 0.0
-    path: list[list[float]] = field(default_factory=list)
 
 
 @dataclass
@@ -206,7 +205,6 @@ class SymbolDetector:
             distance_report=report,
             fill_ts=fill_ts,
             fill_price=fill_price,
-            path=self._tick_tape(opened.start_ts),
         )
 
     def _simulate(
@@ -272,67 +270,6 @@ class SymbolDetector:
             best = min(best, last_price)
         return (opened.extreme_price - best) / opened.start_price * 100.0
 
-    def _mfe_after_fill(
-        self, fill_ts: int, fill_px: float, direction: str, last_price: float
-    ) -> tuple[float, float, int]:
-        best_pnl = 0.0
-        best_px = fill_px
-        best_ts = fill_ts
-        for trade in self.trades:
-            if trade.ts < fill_ts:
-                continue
-            pnl = self._pnl_pct(direction, fill_px, trade.price)
-            if pnl > best_pnl:
-                best_pnl = pnl
-                best_px = trade.price
-                best_ts = trade.ts
-        if last_price > 0:
-            pnl = self._pnl_pct(direction, fill_px, last_price)
-            if pnl > best_pnl:
-                best_pnl = pnl
-                best_px = last_price
-        return best_pnl, best_px, best_ts
-
-    def _tick_tape(self, start_ts: int, end_ts: int | None = None) -> list[list[float]]:
-        # Ровно 3 секунды вокруг прострела: чуть до старта и остаток после.
-        lo = int(start_ts) - 200
-        hi = lo + 3000
-        if end_ts is not None:
-            hi = max(hi, int(end_ts))
-        out: list[list[float]] = []
-        for trade in self.trades:
-            if trade.ts < lo:
-                continue
-            if trade.ts > hi:
-                break
-            side = 1.0 if str(trade.side).lower() in {"buy", "b"} else -1.0
-            out.append([float(trade.ts), float(trade.price), side, float(trade.qty)])
-        if len(out) > 2500:
-            step = len(out) / 2500
-            keep = [out[int(i * step)] for i in range(2500)]
-            keep[-1] = out[-1]
-            return keep
-        return out
-
-    def _path_after_fill(
-        self, fill_ts: int, fill_px: float, last_price: float, end_ts: int
-    ) -> list[list[float]]:
-        if fill_ts <= 0 or fill_px <= 0:
-            return []
-        pts: list[list[float]] = [[float(fill_ts), float(fill_px)]]
-        for trade in self.trades:
-            if trade.ts <= fill_ts:
-                continue
-            if end_ts and trade.ts > end_ts:
-                break
-            if pts[-1][0] == trade.ts:
-                pts[-1][1] = trade.price
-            else:
-                pts.append([float(trade.ts), float(trade.price)])
-        if last_price > 0 and pts[-1][1] != last_price:
-            pts.append([float(end_ts or pts[-1][0]), float(last_price)])
-        return _downsample_path(pts, 80)
-
     @staticmethod
     def _pnl_pct(direction: str, fill_px: float, exit_px: float) -> float:
         if fill_px <= 0 or exit_px <= 0:
@@ -383,25 +320,6 @@ class SymbolDetector:
                 ref = self.trades[0].price
             out[window_ms] = (ref, high, low, count, qvol)
         return out
-
-
-def _downsample_path(pts: list[list[float]], max_points: int) -> list[list[float]]:
-    if len(pts) <= max_points:
-        return pts
-    if max_points < 3:
-        return [pts[0], pts[-1]]
-    out = [pts[0]]
-    step = (len(pts) - 2) / (max_points - 2)
-    cursor = 0.0
-    last_idx = 0
-    for _ in range(max_points - 2):
-        cursor += step
-        idx = min(len(pts) - 2, max(1, int(round(cursor))))
-        if idx != last_idx:
-            out.append(pts[idx])
-            last_idx = idx
-    out.append(pts[-1])
-    return out
 
 
 class BtcDeltaTracker:

@@ -65,7 +65,7 @@ output:
   hints_name: distance_hints.csv
   mt_plan_name: mt_plan.json
   mt_run_hours: 3
-  retain_hours: 48
+  retain_hours: 24
   cleanup_sec: 3600
 
 web:

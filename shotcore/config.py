@@ -94,7 +94,7 @@ class OutputConfig:
     hints_name: str = "distance_hints.csv"
     mt_plan_name: str = "mt_plan.json"
     mt_run_hours: float = 3.0
-    retain_hours: int = 48
+    retain_hours: int = 24
     cleanup_sec: int = 3600
 
 

@@ -21,12 +21,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent
 PREFIX_DEFAULT = "SC"
 FOLDER_DEFAULT = "MBsupport"
-STATE_PATH = ROOT / "state.json"
 _ID_SEQ = 0
 
 CLONE_LIFETIME_KEYS = (
@@ -90,6 +90,14 @@ def log(msg: str) -> None:
     print(datetime.now().strftime("%H:%M:%S"), msg, flush=True)
 
 
+def state_file() -> Path:
+    raw = env("MT_STATE_PATH")
+    if raw:
+        return Path(raw).expanduser()
+    path = default_algos_path()
+    return path.with_name("mbsupport-launcher-state.json")
+
+
 def new_id() -> int:
     global _ID_SEQ
     _ID_SEQ += 1
@@ -110,23 +118,96 @@ def default_algos_path() -> Path:
     return linux
 
 
-def fetch_plan(url: str, token: str) -> dict[str, Any]:
-    base = url.rstrip("/")
-    req_url = base + "/api/mt-plan"
-    headers = {"Accept": "application/json"}
+def shotcore_base_url(url: str) -> str:
+    base = (url or "").strip().rstrip("/")
+    lowered = base.lower()
+    for suffix in ("/api/mt-plan", "/api/stats", "/api/status", "/health"):
+        if lowered.endswith(suffix):
+            base = base[: -len(suffix)].rstrip("/")
+            break
+    return base
+
+
+def _shot_headers(token: str) -> dict[str, str]:
+    headers = {"Accept": "application/json", "User-Agent": "MBsupport-mt-launcher"}
     if token:
         headers["X-Shot-Token"] = token
-        req_url += ("&" if "?" in req_url else "?") + "token=" + token
-    req = Request(req_url, headers=headers)
+    return headers
+
+
+def _with_token(url: str, token: str) -> str:
+    if not token:
+        return url
+    return url + ("&" if "?" in url else "?") + "token=" + token
+
+
+def _http_text(url: str, token: str = "", timeout: float = 8) -> tuple[int, str]:
+    req = Request(_with_token(url, token), headers=_shot_headers(token))
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            return int(resp.status), resp.read().decode("utf-8", errors="replace")
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+        return int(exc.code), body
+
+
+def diagnose_shotcore(base: str, token: str, failed_url: str, code: int) -> str:
+    lines = [f"запрос: {failed_url}", f"SHOTCORE_URL={base or '(пусто)'}"]
+    if "127.0.0.1" in base or "localhost" in base:
+        lines.append("URL указывает на ЭТУ машину (MoonTrader). ShotCore обычно на другом сервере.")
+        lines.append("В mt_launcher/.env:")
+        lines.append("  SHOTCORE_URL=http://IP-сервера-ShotCore:4861")
+    try:
+        hcode, hbody = _http_text(base + "/health", "", timeout=5)
+        snippet = (hbody or "").strip()[:80]
+        if hcode == 200 and snippet.lower().startswith("ok"):
+            lines.append("GET /health = ok — это ShotCore, но маршрута /api/mt-plan нет.")
+            lines.append("На сервере ShotCore обновите контейнер:")
+            lines.append("  cd MBsupport && git pull && docker compose up -d --build --force-recreate")
+        elif hcode == 401:
+            lines.append("ShotCore просит токен. Скопируйте WEB_TOKEN дашборда в SHOTCORE_TOKEN.")
+        else:
+            lines.append(f"GET /health → {hcode} {snippet!r}")
+            lines.append("По этому адресу, похоже, не дашборд ShotCore (порт 4861).")
+    except URLError as exc:
+        lines.append(f"GET /health не открылся: {exc.reason}")
+        lines.append("Проверьте IP, порт 4861 и фаервол: curl -sS http://IP:4861/health")
+    if code == 401:
+        lines.append("401: SHOTCORE_TOKEN должен совпадать с WEB_TOKEN на дашборде.")
+    return "\n".join(lines)
+
+
+def fetch_plan(url: str, token: str) -> dict[str, Any]:
+    base = shotcore_base_url(url)
+    if not base:
+        raise SystemExit(
+            "Пустой SHOTCORE_URL. В mt_launcher/.env:\n"
+            "  SHOTCORE_URL=http://IP-сервера-ShotCore:4861"
+        )
+    req_url = base + "/api/mt-plan"
+    query: dict[str, str] = {}
+    lookback = env_int("LOOKBACK_MIN", 1440)
+    query["lookback"] = str(lookback)
+    if token:
+        query["token"] = token
+    req_url += "?" + urlencode(query)
+    req = Request(req_url, headers=_shot_headers(token))
     try:
         with urlopen(req, timeout=30) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
     except HTTPError as exc:
-        raise SystemExit(f"ShotCore API {exc.code}: {exc.reason}. Проверьте SHOTCORE_URL и SHOTCORE_TOKEN.") from exc
+        body = exc.read().decode("utf-8", errors="replace")[:300] if exc.fp else ""
+        hint = diagnose_shotcore(base, token, req_url, exc.code)
+        extra = f"\n{body}" if body.strip() else ""
+        raise SystemExit(f"ShotCore API {exc.code} {exc.reason}{extra}\n{hint}") from exc
     except URLError as exc:
-        raise SystemExit(f"Нет связи с ShotCore {base}: {exc.reason}") from exc
+        hint = diagnose_shotcore(base, token, req_url, 0)
+        raise SystemExit(f"Нет связи с ShotCore: {exc.reason}\n{hint}") from exc
+    except TimeoutError as exc:
+        raise SystemExit(f"Таймаут {req_url}. Проверьте IP:порт и фаервол 4861/tcp.") from exc
     if not isinstance(payload, dict) or "pairs" not in payload:
-        raise SystemExit("Ответ /api/mt-plan не похож на план ShotCore.")
+        keys = list(payload)[:12] if isinstance(payload, dict) else type(payload).__name__
+        raise SystemExit(f"Ответ {req_url} не похож на план ShotCore. Ключи: {keys}")
     return payload
 
 
@@ -162,7 +243,7 @@ def load_config(path: Path) -> tuple[Any, str]:
 
 
 def save_config(path: Path, data: Any, encoding: str) -> None:
-    backup = path.with_name(path.name + datetime.now().strftime(".bak-%Y%m%d-%H%M%S"))
+    backup = path.with_name(path.name + ".bak-launcher")
     shutil.copy2(path, backup)
     log(f"backup {backup.name}")
     tmp = path.with_name(path.name + ".tmp")
@@ -227,7 +308,6 @@ def ensure_folder(root: Any, folder: str) -> int:
     for item in groups:
         if group_name(item) == folder:
             gid = group_id(item)
-            log(f"папка «{folder}» уже есть, id={gid}")
             return gid or new_id()
     gid = new_id()
     groups.append({"id": gid, "name": folder, "groupType": 1, "actionType": 13})
@@ -376,7 +456,7 @@ def walk_set_numeric(obj: Any, names: set[str], value: Any) -> bool:
     return found
 
 
-def set_minmax(obj: Any, names: set[str], low: float, high: float) -> bool:
+def set_minmax(obj: Any, names: set[str], low: int, high: int) -> bool:
     found = False
     if isinstance(obj, dict):
         if is_wrapped_arg(obj) and str(obj.get("name") or "").lower() in names:
@@ -384,18 +464,18 @@ def set_minmax(obj: Any, names: set[str], low: float, high: float) -> bool:
             if isinstance(val, dict) and ("min" in val or "max" in val or "toggle" in val):
                 val["toggle"] = True
                 if "min" in val:
-                    val["min"] = low
+                    val["min"] = int(low)
                 if "max" in val:
-                    val["max"] = high
+                    val["max"] = int(high)
                 return True
         for key, val in obj.items():
             target = unwrap_arg(val) if is_wrapped_arg(val) else val
             if str(key).lower() in names and isinstance(target, dict) and ("min" in target or "max" in target or "toggle" in target):
                 target["toggle"] = True
                 if "min" in target:
-                    target["min"] = low
+                    target["min"] = int(low)
                 if "max" in target:
-                    target["max"] = high
+                    target["max"] = int(high)
                 found = True
             elif set_minmax(val, names, low, high):
                 found = True
@@ -431,6 +511,33 @@ def our_algo(algo: dict[str, Any], prefix: str) -> bool:
     return algo_title(algo).startswith(tag) or naming.startswith(tag)
 
 
+def size_arg_names(algo: dict[str, Any]) -> list[str]:
+    args = arguments(algo)
+    prefer = (
+        "orderSize",
+        "orderVolume",
+        "quoteOrderSize",
+        "sizeUsdt",
+        "volumeUsdt",
+        "usdSize",
+        "size",
+        "volume",
+        "amount",
+    )
+    found: list[str] = []
+    for name in prefer:
+        key = arg_key(args, name)
+        if key and key not in found:
+            found.append(key)
+    for key in args:
+        low = str(key).lower()
+        if key in found:
+            continue
+        if any(part in low for part in ("ordersize", "ordervolume", "sizeusdt", "volumeusdt")):
+            found.append(str(key))
+    return found
+
+
 def order_size() -> float:
     """Число в поле Order size Shot: уже номинал с плечом. 10 = ордер на $10."""
     raw = env("ORDER_SIZE")
@@ -450,27 +557,19 @@ def as_timespan(seconds: int) -> str:
 
 
 def stamp_clone(algo: dict[str, Any], master_id: int, seconds: int) -> None:
-    """Помечает копию как клон с lifetime — MT сам остановит и удалит."""
+    """Клон как в клиенте MT: isClone=true, новый id. Lifetime считает watch, не лишние поля JSON."""
     algo["isClone"] = True
-    timespan = as_timespan(seconds)
-    existing_lifetime = [k for k in CLONE_LIFETIME_KEYS if k in algo]
-    if existing_lifetime:
-        for key in existing_lifetime:
-            current = algo[key]
-            if isinstance(current, str) and ":" in current:
-                algo[key] = timespan
-            else:
-                algo[key] = seconds
-    else:
-        algo["cloneLifeTime"] = seconds
-        algo["lifeTime"] = seconds
-    existing_parent = [k for k in CLONE_PARENT_KEYS if k in algo]
-    if existing_parent:
-        for key in existing_parent:
+    for key in CLONE_LIFETIME_KEYS:
+        if key not in algo:
+            continue
+        current = algo[key]
+        if isinstance(current, str) and ":" in current:
+            algo[key] = as_timespan(seconds)
+        else:
+            algo[key] = int(seconds)
+    for key in CLONE_PARENT_KEYS:
+        if key in algo:
             algo[key] = master_id
-    else:
-        algo["parentId"] = master_id
-        algo["cloneParentId"] = master_id
 
 
 def disable_active_markets(algo: dict[str, Any]) -> None:
@@ -493,12 +592,14 @@ def build_algo(
     algo = copy.deepcopy(template)
     symbol = mt_symbol(str(pair.get("symbol") or ""))
     base = str(pair.get("base") or symbol.split("-")[0]).upper()
-    distance = round(float(pair.get("recommend_pct") or 0), 4)
-    tp = round(float(pair.get("tp_pct") or 0), 4)
-    lever = float(pair.get("lever") or 0) or env_float("DEFAULT_LEVERAGE", 20)
+    distance = round(float(pair.get("recommend_pct") or 0), 2)
+    tp = round(float(pair.get("tp_pct") or 0), 2)
+    lever = int(round(float(pair.get("lever") or 0) or env_float("DEFAULT_LEVERAGE", 20)))
     hold_ms = int(pair.get("hold_ms") or 300)
     size = order_size()
-    name = f"{prefix} {base} D{distance:g} TP{tp:g} x{lever:g}"
+    if abs(size - round(size)) < 1e-9:
+        size = int(round(size))
+    title = f"{prefix} {base} D{distance:g} TP{tp:g} x{lever}"
     algo["id"] = new_id()
     algo["groupID"] = folder_id
     algo["groupType"] = algo.get("groupType") or 1
@@ -507,9 +608,9 @@ def build_algo(
     algo["name"] = template.get("name") or "Shots Group"
     algo["signature"] = template.get("signature") or "SG"
     if "info" in algo:
-        algo["info"] = name
-    set_arg(algo, "info", name)
-    set_arg(algo, "namingRule", name)
+        algo["info"] = title
+    set_arg(algo, "info", title)
+    set_arg(algo, "namingRule", title)
     set_arg(algo, "isEmulated", False)
     set_arg(algo, "autoStart", auto_start)
     set_arg(algo, "autoRestart", False if auto_start else bool(get_arg(algo, "autoRestart")))
@@ -532,7 +633,9 @@ def build_algo(
         set_arg(algo, "takeProfitPercentage", tp)
         set_arg(algo, "takeProfitPercent", tp)
     walk_set_numeric(algo, {"ordersize", "ordervolume", "volumeusdt", "sizeusdt"}, size)
-    set_arg(algo, "orderSize", size)
+    if not set_arg(algo, "orderSize", size):
+        for size_key in size_arg_names(algo):
+            set_arg(algo, size_key, size)
     set_minmax(algo, {"togglemaxleveragefilter", "toggleleveragefilter"}, lever, lever)
     walk_set_numeric(algo, {"shotrestartdelay"}, max(0.3, hold_ms / 1000.0))
     disable_active_markets(algo)
@@ -572,7 +675,190 @@ def prune_ours(algos: list[Any], prefix: str, folder_id: int = 0) -> int:
 
 
 def write_state(payload: dict[str, Any]) -> None:
-    STATE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path = state_file()
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def read_state() -> dict[str, Any]:
+    path = state_file()
+    if not path.is_file():
+        return {"pairs": {}}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {"pairs": {}}
+    if not isinstance(data, dict):
+        return {"pairs": {}}
+    data.setdefault("pairs", {})
+    return data
+
+
+def pair_from_algo(algo: dict[str, Any]) -> str:
+    wl = get_arg(algo, "whiteList")
+    if isinstance(wl, dict):
+        items = wl.get("all") or wl.get("sample") or []
+        if items:
+            return mt_symbol(str(items[0]))
+    if isinstance(wl, list) and wl:
+        return mt_symbol(str(wl[0]))
+    if isinstance(wl, str) and wl.strip():
+        return mt_symbol(wl.split(",")[0])
+    title = algo_title(algo)
+    parts = title.split()
+    if len(parts) >= 2:
+        return mt_symbol(parts[1] + "-usdt-swap")
+    return ""
+
+
+def prune_symbol(algos: list[Any], prefix: str, symbol: str) -> int:
+    wanted = mt_symbol(symbol)
+    kept: list[Any] = []
+    removed = 0
+    for algo in algos:
+        if isinstance(algo, dict) and our_algo(algo, prefix) and pair_from_algo(algo) == wanted:
+            removed += 1
+            continue
+        kept.append(algo)
+    algos[:] = kept
+    return removed
+
+
+def pair_fp(pair: dict[str, Any]) -> tuple[float, float, int]:
+    return (
+        round(float(pair.get("recommend_pct") or 0), 2),
+        round(float(pair.get("tp_pct") or 0), 2),
+        int(round(float(pair.get("lever") or 0) or env_float("DEFAULT_LEVERAGE", 20))),
+    )
+
+
+def start_pair(
+    algos: list[Any],
+    template: dict[str, Any],
+    pair: dict[str, Any],
+    folder_id: int,
+    prefix: str,
+    seconds: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    master = build_algo(template, pair, folder_id, prefix, auto_start=False)
+    clone = build_clone(master, seconds)
+    algos.append(master)
+    algos.append(clone)
+    return master, clone
+
+
+def sync_tick(dry_run: bool) -> None:
+    plan = fetch_plan(env("SHOTCORE_URL"), env("SHOTCORE_TOKEN"))
+    path = default_algos_path()
+    if not path.is_file():
+        raise SystemExit(f"Не найден {path}. Задайте MT_ALGOS_PATH или MT_PROFILE.")
+    folder = env("MT_FOLDER", FOLDER_DEFAULT)
+    prefix = env("ALGO_PREFIX", PREFIX_DEFAULT)
+    pairs = select_pairs(plan)
+    by_sym = {mt_symbol(str(p.get("symbol") or "")): p for p in pairs if p.get("symbol")}
+    data, encoding = load_config(path)
+    algos, _key, root = as_list_container(data)
+    template = find_template(algos, env("MT_TEMPLATE"))
+    folder_id = ensure_folder(root, folder) if isinstance(root, dict) else new_id()
+    hours = float(plan.get("run_hours") or env_float("RUN_HOURS", 3))
+    seconds = hours_to_seconds(hours)
+    state = read_state()
+    tracked: dict[str, Any] = state.setdefault("pairs", {})
+    dirty = False
+    now_ts = datetime.now(tz=timezone.utc).timestamp()
+
+    for sym in list(tracked):
+        if sym in by_sym:
+            continue
+        n = prune_symbol(algos, prefix, sym)
+        if n:
+            dirty = True
+            log(f"{sym} нет в плане — снял {n}")
+        tracked.pop(sym, None)
+
+    for sym, pair in by_sym.items():
+        distance, tp, lever = pair_fp(pair)
+        score_plus = int(pair.get("score_plus") or 0)
+        score_minus = int(pair.get("score_minus") or 0)
+        rec = tracked.get(sym) or {}
+        started = float(rec.get("started_ts") or 0)
+        expired = bool(started and now_ts - started >= seconds)
+        d_changed = bool(rec) and (
+            round(float(rec.get("distance") or 0), 2) != distance
+            or round(float(rec.get("tp") or 0), 2) != tp
+        )
+        new_minus = bool(rec) and not rec.get("paused") and score_minus > int(rec.get("score_minus") or 0)
+        paused = bool(rec.get("paused"))
+        pause_d = round(float(rec.get("pause_distance") or rec.get("distance") or 0), 2)
+        pause_tp = round(float(rec.get("pause_tp") or rec.get("tp") or 0), 2)
+
+        if new_minus and not d_changed:
+            n = prune_symbol(algos, prefix, sym)
+            dirty = True
+            tracked[sym] = {
+                "paused": True,
+                "pause_reason": "minus",
+                "pause_distance": distance,
+                "pause_tp": tp,
+                "distance": distance,
+                "tp": tp,
+                "lever": lever,
+                "score_plus": score_plus,
+                "score_minus": score_minus,
+            }
+            log(f"{sym} минус в счёте {int(rec.get('score_minus') or 0)}→{score_minus}, клон снят. Жду новую D/TP.")
+            continue
+
+        if paused and distance == pause_d and tp == pause_tp:
+            rec["score_plus"] = score_plus
+            rec["score_minus"] = score_minus
+            continue
+
+        if rec and not paused and not expired and not d_changed and rec.get("clone_id"):
+            rec["score_plus"] = score_plus
+            rec["score_minus"] = score_minus
+            continue
+
+        reason = "старт"
+        if d_changed:
+            reason = f"D/TP {rec.get('distance')}/{rec.get('tp')} → {distance}/{tp}"
+        elif expired:
+            reason = f"истекли {hours:g} ч"
+        elif paused:
+            reason = "снята пауза, новая рекомендация"
+        elif new_minus:
+            reason = "минус + новая D/TP"
+        n = prune_symbol(algos, prefix, sym)
+        master, clone = start_pair(algos, template, pair, folder_id, prefix, seconds)
+        dirty = True
+        tracked[sym] = {
+            "paused": False,
+            "master_id": master["id"],
+            "clone_id": clone["id"],
+            "distance": distance,
+            "tp": tp,
+            "lever": lever,
+            "score_plus": score_plus,
+            "score_minus": score_minus,
+            "started_ts": now_ts,
+            "name": algo_title(clone),
+            "removed": n,
+        }
+        log(
+            f"{sym} {reason}: {algo_title(clone)}  "
+            f"D={distance}% TP={tp}% x{lever} счет {score_plus}/{score_minus}"
+        )
+
+    state["lookback_min"] = plan.get("lookback_min")
+    state["updated_utc"] = plan.get("updated_utc")
+    state["algos_path"] = str(path)
+    state["folder"] = folder
+    if dry_run:
+        log(f"DRY RUN: файл не пишу. пар в плане {len(by_sym)}, правок {int(dirty)}")
+        return
+    if dirty:
+        save_config(path, data, encoding)
+        log("algorithms.config обновлён")
+    write_state(state)
 
 
 def apply_plan(plan: dict[str, Any], dry_run: bool) -> dict[str, Any]:
@@ -661,8 +947,9 @@ def stop_algos(dry_run: bool) -> None:
     if dry_run:
         return
     save_config(path, data, encoding)
-    if STATE_PATH.is_file():
-        STATE_PATH.unlink()
+    st = state_file()
+    if st.is_file():
+        st.unlink()
     log("алгоритмы ShotCore сняты из algorithms.config. Обновите ядро/клиент.")
 
 
@@ -689,46 +976,72 @@ def cmd_inspect() -> None:
             )
     shots = [a for a in algos if isinstance(a, dict) and str(a.get("signature") or "").upper() == "SG"]
     print("Shot Group count:", len(shots), "clones:", sum(1 for a in shots if a.get("isClone")))
+    if shots:
+        names = sorted(str(k) for k in arguments(shots[0]))
+        print("arg names:", ", ".join(names))
+        size_names = size_arg_names(shots[0])
+        print(
+            "size fields:",
+            {name: get_arg(shots[0], name) for name in size_names} or "(не найден orderSize — пришлите строку arg names)",
+        )
     for algo in (shots or algos)[:8]:
-        args = arguments(algo)
-        names = sorted(str(k) for k in args)
         print(
             f"  id={algo.get('id')} group={algo.get('groupID')} sig={algo.get('signature')} "
             f"isClone={algo.get('isClone')} info={algo_title(algo)!r} "
-            f"distance={get_arg(algo, 'distance')} orderSize={get_arg(algo, 'orderSize')} "
-            f"autoStart={get_arg(algo, 'autoStart')} args={names[:16]}"
+            f"distance={get_arg(algo, 'distance')} "
+            f"orderSize={get_arg(algo, 'orderSize')} "
+            f"autoStart={get_arg(algo, 'autoStart')}"
         )
 
 
 def cmd_plan() -> None:
-    plan = fetch_plan(env("SHOTCORE_URL", "http://127.0.0.1:4861"), env("SHOTCORE_TOKEN"))
+    plan = fetch_plan(env("SHOTCORE_URL"), env("SHOTCORE_TOKEN"))
     pairs = select_pairs(plan)
-    print("updated:", plan.get("updated_utc"), "run_hours:", plan.get("run_hours"), "pairs in plan:", len(plan.get("pairs") or []))
-    print("selected:", len(pairs), "orderSize:", order_size())
+    print(
+        "updated:", plan.get("updated_utc"),
+        "lookback_min:", plan.get("lookback_min"),
+        "run_hours:", plan.get("run_hours"),
+        "pairs in plan:", len(plan.get("pairs") or []),
+    )
+    print("selected:", len(pairs), "orderSize:", order_size(), "LOOKBACK_MIN:", env_int("LOOKBACK_MIN", 1440))
     for pair in pairs:
         print(
             f"  {pair.get('symbol'):<22} rec={pair.get('recommend_pct')}%  "
-            f"tp={pair.get('tp_pct')}%  x{pair.get('lever') or 0:g}  sub={pair.get('subscribed')}"
+            f"tp={pair.get('tp_pct')}%  x{pair.get('lever') or 0:g}  "
+            f"счет={pair.get('score_plus')}/{pair.get('score_minus')}  sub={pair.get('subscribed')}"
         )
 
 
 def cmd_apply(dry: bool) -> dict[str, Any]:
-    plan = fetch_plan(env("SHOTCORE_URL", "http://127.0.0.1:4861"), env("SHOTCORE_TOKEN"))
+    plan = fetch_plan(env("SHOTCORE_URL"), env("SHOTCORE_TOKEN"))
     return apply_plan(plan, dry_run=dry)
 
 
-def cmd_run(dry: bool) -> None:
-    cmd_apply(dry)
-    if dry:
-        log("DRY RUN: MT сам снял бы клоны по lifetime. Python не спит.")
-        return
-    log("скрипт завершён. Клоны гасит MoonTrader по времени жизни.")
+def cmd_watch(dry: bool) -> None:
+    poll = max(5, env_int("POLL_SEC", 15))
+    log(
+        f"watch каждые {poll} с · lookback={env_int('LOOKBACK_MIN', 1440)} мин · "
+        f"{env('SHOTCORE_URL')} → {default_algos_path()}"
+    )
+    while True:
+        try:
+            sync_tick(dry)
+        except SystemExit as exc:
+            log(str(exc) or "ошибка тика")
+        except Exception as exc:
+            log(f"ошибка тика: {exc}")
+        time.sleep(poll)
 
 
 def main() -> None:
     load_env()
     parser = argparse.ArgumentParser(description="ShotCore → MoonTrader Shot Group")
-    parser.add_argument("command", nargs="?", default="run", choices=["run", "apply", "stop", "plan", "inspect"])
+    parser.add_argument(
+        "command",
+        nargs="?",
+        default="watch",
+        choices=["watch", "run", "apply", "stop", "plan", "inspect"],
+    )
     parser.add_argument("--dry-run", action="store_true", help="не писать algorithms.config")
     args = parser.parse_args()
     dry = args.dry_run or env_bool("DRY_RUN", False)
@@ -741,7 +1054,7 @@ def main() -> None:
     elif args.command == "stop":
         stop_algos(dry)
     else:
-        cmd_run(dry)
+        cmd_watch(dry)
 
 
 if __name__ == "__main__":

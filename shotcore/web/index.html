@@ -79,9 +79,8 @@
       display: flex; flex-direction: column; max-height: 72vh; overflow: hidden;
     }
     .feed-search { min-width: 160px; max-width: 240px; padding: 5px 8px; font-size: 12px; }
-    .feed-item { display: grid; grid-template-columns: 92px 1fr auto; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); align-items: center; cursor: pointer; }
+    .feed-item { display: grid; grid-template-columns: 92px 1fr auto; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); align-items: center; }
     .feed-item:hover { background: #1c2230; }
-    tbody tr.clickable { cursor: pointer; }
     .empty { padding: 28px; color: var(--muted); }
     .note { padding: 0 24px 16px; color: var(--muted); font-size: 12px; }
     .panel-head {
@@ -90,27 +89,6 @@
     }
     .panel-head .head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .lever-filter { min-width: 118px; padding: 5px 8px; font-size: 12px; }
-    .overlay {
-      display: none; position: fixed; inset: 0; background: #05070ccc; z-index: 40;
-      align-items: center; justify-content: center; padding: 24px;
-    }
-    .overlay.open { display: flex; }
-    .chart-box {
-      width: min(1100px, 100%); background: var(--panel); border: 1px solid var(--line);
-      border-radius: 12px; overflow: hidden; box-shadow: 0 18px 50px #0008;
-    }
-    .chart-head {
-      display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
-      padding: 12px 16px; border-bottom: 1px solid var(--line);
-    }
-    .chart-head h3 { margin: 0; font-size: 16px; font-weight: 650; }
-    .chart-x {
-      background: var(--chip); border: 1px solid var(--line); color: var(--text);
-      width: 32px; height: 32px; border-radius: 8px; cursor: pointer; font-size: 18px;
-    }
-    .chart-canvas-wrap { padding: 0 8px 8px; background: #10141c; }
-    #chartCanvas { display: block; width: 100%; height: 560px; }
-    #chartHint { padding: 8px 16px 12px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
     @media (max-width: 1100px) {
       .grid, .kpis, .mt-wrap, .mt-nums { grid-template-columns: 1fr; }
       header { flex-direction: column; align-items: flex-start; }
@@ -179,8 +157,7 @@
     </section>
   </div>
   <div class="note">
-    Клик по событию открывает тиковый график за 3 секунды: цена, объём под свечой (токены и USDT) и шкала времени. Рекомендация — дистанция, на которой виртуальные ордера дали максимум плюса. TP — процент от входа, при котором выгоднее закрывать по тейку, чем ждать 0.3 с.
-    План для ядра MoonTrader: <code>data/mt_plan.json</code> и <code>data/mt_plan.csv</code> — пара, рекомендация %, TP %, hold_ms, run_hours (по умолчанию 3 часа).
+    Рекомендация — дистанция, на которой виртуальные ордера дали максимум плюса. TP — процент от входа, при котором выгоднее закрывать по тейку, чем ждать 0.3 с. Хранение прострелов и логов — 24 часа.
   </div>
   <div class="mt-wrap">
     <section class="mt-box">
@@ -229,20 +206,7 @@
   <div class="note">
     Сортировка только по убыванию 1ч Δ. Первые N выкидываются как шум, дальше берутся 25 самых активных за час пар.
   </div>
-  <div class="overlay" id="chartOverlay">
-    <div class="chart-box">
-      <div class="chart-head">
-        <div>
-          <h3 id="chartTitle">график прострела</h3>
-          <div class="meta" id="chartSub"></div>
-        </div>
-        <button class="chart-x" type="button" id="chartClose" aria-label="закрыть">×</button>
-      </div>
-      <div class="chart-canvas-wrap"><canvas id="chartCanvas"></canvas></div>
-      <div id="chartHint"></div>
-    </div>
   </div>
-  <script src="/static/chart.js"></script>
   <script>
     const qs = new URLSearchParams(location.search);
     const token = qs.get("token");
@@ -257,6 +221,7 @@
     const savedLever = localStorage.getItem("shotcore_lever");
     let lastBoard = [];
     let lastShots = [];
+    let lastRows = [];
 
     function leverKey(n) {
       const v = Math.round(Number(n) || 0);
@@ -324,8 +289,7 @@
       const q = `lookback=${lookback}&direction=${direction}&btc_calm=${btcCalm}`;
       const [stats, shots] = await Promise.all([
         api("/api/stats?" + q),
-        api("/api/shots?" + q + "&limit=" + (feedSearchEl.value.trim() ? 300 : 80)
-          + (feedSearchEl.value.trim() ? "&symbol=" + encodeURIComponent(feedSearchEl.value.trim()) : "")),
+        api("/api/shots?" + q + "&limit=60"),
       ]);
       const f = stats.filters || {};
       const board = stats.active_markets || [];
@@ -370,14 +334,20 @@
         `пул ${stats.universe_size || 0} → skip ${f.active_ignore_first ?? 2} → ${activeN}` +
         (leverFilterEl.value ? ` · x${leverFilterEl.value}` : "");
 
+      lastRows = stats.rows || [];
+      renderTable();
+      renderFeed(shots.shots || []);
+    }
+
+    function renderTable() {
       const needle = searchEl.value.trim().toLowerCase();
-      const rows = (stats.rows || []).filter(r => !needle || r.symbol.toLowerCase().includes(needle));
+      const rows = lastRows.filter(r => !needle || r.symbol.toLowerCase().includes(needle));
       const body = document.getElementById("rows");
       if (!rows.length) {
         body.innerHTML = `<tr><td class="empty" colspan="9">Нет прострелов в выбранном окне</td></tr>`;
       } else {
         body.innerHTML = rows.map(r => `
-          <tr class="clickable" data-symbol="${r.symbol}" data-ts="${r.last_ts || 0}">
+          <tr data-symbol="${r.symbol}">
             <td>${r.symbol}</td>
             <td class="amber">${lever(r.lever)}</td>
             <td>${r.count} <span class="down">${r.count_down}</span>/<span class="up">${r.count_up}</span></td>
@@ -389,7 +359,6 @@
             <td class="${dirClass(r.last_direction)}">${r.last_direction} ${fmt(r.last_percent)} · ${r.last_time}</td>
           </tr>`).join("");
       }
-      renderFeed(shots.shots || []);
     }
 
     function renderFeed(shots) {
@@ -406,7 +375,7 @@
         return;
       }
       box.innerHTML = items.map(s => `
-        <div class="feed-item" data-symbol="${s.symbol}" data-ts="${s.peak_ts || 0}" title="Открыть график прострела">
+        <div class="feed-item">
           <div class="meta">${s.time}</div>
           <div>${s.symbol} <span class="amber">${lever(s.lever)}</span>
             <div class="meta">реком. ${fmt(s.suggest_distance)}% · ${s.vplus ? "плюс" : "минус"} ${signed(s.pnl_pct)}% / ${s.hold_ms || 300}мс</div>
@@ -415,16 +384,13 @@
         </div>`).join("");
     }
 
-    ["change", "input"].forEach(ev => {
+    ["change"].forEach(ev => {
       lookbackEl.addEventListener(ev, () => tick().catch(console.error));
       directionEl.addEventListener(ev, () => tick().catch(console.error));
       btcCalmEl.addEventListener(ev, () => tick().catch(console.error));
-      searchEl.addEventListener(ev, () => tick().catch(console.error));
     });
-    feedSearchEl.addEventListener("input", () => {
-      renderFeed();
-      tick().catch(console.error);
-    });
+    searchEl.addEventListener("input", () => renderTable());
+    feedSearchEl.addEventListener("input", () => renderFeed());
     leverFilterEl.addEventListener("change", () => {
       localStorage.setItem("shotcore_lever", leverFilterEl.value);
       renderBoard(lastBoard);
@@ -433,25 +399,8 @@
       const base = (meta.textContent || "").split(" · ")[0];
       meta.textContent = base + (leverFilterEl.value ? ` · x${leverFilterEl.value} (${shown})` : "");
     });
-    document.getElementById("feed").addEventListener("click", (ev) => {
-      const item = ev.target.closest(".feed-item");
-      if (!item || !item.dataset.ts || typeof window.openShotChart !== "function") return;
-      window.openShotChart(api, item.dataset.symbol, item.dataset.ts);
-    });
-    document.getElementById("rows").addEventListener("click", (ev) => {
-      const row = ev.target.closest("tr[data-ts]");
-      if (!row || !row.dataset.ts || row.dataset.ts === "0") return;
-      window.openShotChart(api, row.dataset.symbol, row.dataset.ts);
-    });
-    document.getElementById("chartClose").addEventListener("click", () => window.closeShotChart());
-    document.getElementById("chartOverlay").addEventListener("click", (ev) => {
-      if (ev.target.id === "chartOverlay") window.closeShotChart();
-    });
-    document.addEventListener("keydown", (ev) => {
-      if (ev.key === "Escape") window.closeShotChart();
-    });
     tick().catch(err => { document.getElementById("live").textContent = "ошибка: " + err.message; });
-    setInterval(() => tick().catch(console.error), 2500);
+    setInterval(() => tick().catch(console.error), 8000);
   </script>
 </body>
 </html>

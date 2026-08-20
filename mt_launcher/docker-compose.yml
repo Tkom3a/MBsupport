@@ -1,0 +1,13 @@
+services:
+  mt-launcher:
+    build: .
+    container_name: mt-launcher
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TZ: ${TZ:-Europe/Moscow}
+      MT_ALGOS_PATH: /mt/algorithms.config
+      POLL_SEC: ${POLL_SEC:-15}
+    volumes:
+      - ${MT_DATA_DIR:-/root/.config/moontrader-data/data/okxoma}:/mt

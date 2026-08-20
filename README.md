@@ -218,12 +218,12 @@ sudo systemctl restart shotcore    # если стоит unit
 ## 6. Файлы на диске
 
 ```
-data/shots.csv              все события
-data/shots.jsonl            то же, по строке на событие
+data/shots.csv              события за последние 24 часа
+data/shots.jsonl            то же, без тиковых графиков
 data/distance_hints.csv     сводка: suggest_distance, vplus_rate, avg_pnl
 data/mt_plan.json           снимок для MT: пара, рекомендация, TP
 data/mt_plan.csv            то же построчно
-logs/shotcore.log           лог ядра
+logs/shotcore.log           лог ядра (не старше суток)
 ```
 
 В Docker эти каталоги примонтированы с хоста (`./data`, `./logs`).
@@ -232,18 +232,13 @@ logs/shotcore.log           лог ядра
 
 ## 7. Запуск алгоритмов в MoonTrader
 
-На **другом сервере** (где стоит MTCore) лежит папка `mt_launcher/`. Скрипт качает `http://IP-ShotCore:4861/api/mt-plan` и пишет Shot Group в папку **MBsupport**: Distance = рекомендация, TP из плана, **Order size = 10 USDT уже с плечом**, фильтр макс. плеча пары (x20/x50). Для каждой пары создаётся мастер и **клон на 3 часа** — время считает MTCore, Python не ждёт.
-
-Краткая последовательность:
+На **сервере MTCore** контейнер `mt_launcher` каждые 15 с читает таблицу ShotCore (`/api/mt-plan?lookback=…`, те же Рекомендация / TP / Счет, что на морде) и держит клоны Shot Group в папке **MBsupport**. Order size = 10 USDT уже с плечом; min/max плеча — целые (x20 / x50). Если D/TP сменились или в счёте минус — старый клон снимается.
 
 ```bash
 cd mt_launcher
 cp .env.example .env
-nano .env          # SHOTCORE_URL, MT_PROFILE=okxoma, MARGIN_USDT=10
-python3 launcher.py inspect
-python3 launcher.py plan
-python3 launcher.py apply --dry-run
-python3 launcher.py run
+nano .env          # SHOTCORE_URL=http://IP-ShotCore:4861
+docker compose up -d --build
 ```
 
 После записи перезапустите `./MTCore`. Полная инструкция: [`mt_launcher/README.md`](mt_launcher/README.md).

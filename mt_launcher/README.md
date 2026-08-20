@@ -17,10 +17,12 @@
 Логика запуска:
 
 1. создаётся **мастер** (не стартует);
-2. с него поднимается **клон** с lifetime = 3 часа;
-3. ядро MoonTrader само останавливает и удаляет клон, когда время вышло.
+2. с него поднимается **клон** (`isClone`, `autoStart`) — как «запустить клон» в клиенте;
+3. контейнер `watch` каждые 15 с сверяет таблицу ShotCore: D, TP, счёт.
 
-Python **не спит** 3 часа.
+Если изменились расстояние или TP — старый клон снимается, пишется новый. Если в счёте появился минус — клон гасится, ждём новую рекомендацию (ShotCore сам пересчитает D/TP). Через `RUN_HOURS` (3 ч) клон тоже снимается.
+
+Плечо в фильтре пишется **целым** (`50`, не `50.0`) — иначе MT не стартует: `Input string '50.0' is not a valid integer`.
 
 Алгоритмы копируются с вашего рабочего Shot Group, поэтому фильтры QAV, шаг цены, mark, BTC-дельта и источник Trades остаются как в шаблоне. Меняются пара, дистанция, TP, размер ордера и фильтр плеча.
 
@@ -46,18 +48,29 @@ Windows: %APPDATA%\moontrader-data\data\<профиль>\algorithms.config
 
 ---
 
-## 2. Установка
-
-На сервере MoonTrader (не обязательно в Docker ShotCore):
+## 2. Запуск в Docker (на сервере MoonTrader)
 
 ```bash
-# скопируйте папку mt_launcher из репозитория
+cd ~/MBsupport/mt_launcher
+cp .env.example .env
+nano .env   # SHOTCORE_URL=http://IP-ShotCore:4861
+# в docker-compose уже: MT_DATA_DIR=/root/.config/moontrader-data/data/okxoma
+docker compose up -d --build
+docker compose logs -f mt-launcher
+```
+
+Контейнер монтирует профиль ядра и каждые 15 секунд делает `watch`.
+
+Без Docker:
+
+```bash
 cd mt_launcher
 cp .env.example .env
 nano .env
+python3 launcher.py inspect
+python3 launcher.py plan
+python3 launcher.py watch
 ```
-
-Зависимостей pip нет — только стандартная библиотека Python.
 
 ---
 
@@ -87,7 +100,9 @@ MT_TEMPLATE=OKXBuy1Test
 
 Пустой `MT_TEMPLATE` — берётся первый Shot Group в файле.
 
-`MARGIN_USDT=10` уходит в **Order size как есть**. Не умножается на x20/x50: в Shot это уже номинал с плечом, биржа открывает $10.
+`MARGIN_USDT=10` уходит в **Order size как есть**. Не умножается на x20/x50.
+
+`LOOKBACK_MIN=1440` — то же окно, что селект «24 часа» на веб-морде. Если на странице стоит 6 часов — поставьте `360`, иначе Distance/TP в ордере не совпадут с таблицей.
 
 `SUBSCRIBED_ONLY=true` — только пары, которые сейчас в активных рынках ShotCore (фильтр 1ч Δ).
 
@@ -105,37 +120,24 @@ python3 launcher.py apply --dry-run
 
 ---
 
-## 5. Боевой запуск на 3 часа
-
-1. Остановите ядро **или** будьте готовы сразу его перезапустить — иначе MT может держать старый список в памяти.
-2. Запуск:
+## 5. Боевой запуск
 
 ```bash
-python3 launcher.py run
+docker compose up -d --build
+# или: python3 launcher.py watch
 ```
 
-Скрипт:
+Каждые 15 с:
 
-1. качает `GET /api/mt-plan`
-2. делает backup `algorithms.config.bak-...`
-3. создаёт папку **MBsupport**, если её нет
-4. удаляет прошлые алгоритмы с префиксом `SC `
-5. для каждой пары пишет мастер `SC SOL D1.42 TP0.35 x50` и клон на `RUN_HOURS` (3 ч = 10800 с)
-6. сразу выходит — дальше время считает MTCore
+1. качает `GET /api/mt-plan?lookback=1440` (те же Рекомендация / TP / Счет, что на морде)
+2. если пары ещё нет — мастер + клон `SC TRUMP D1.91 TP0.49 x50`, клон с `autoStart`
+3. если D или TP изменились — старый клон снимается, поднимается новый
+4. если в счёте вырос минус — клон гасится, пока таблица не даст другую D/TP
+5. через 3 часа клон снимается
 
-То же самое, явно без ожидания:
+`apply` — один проход без цикла. `stop` — снять все `SC *`.
 
-```bash
-python3 launcher.py apply
-```
-
-Снять раньше времени (мастера и клоны `SC *`):
-
-```bash
-python3 launcher.py stop
-```
-
-После `apply` / `run` / `stop` **перезапустите `./MTCore`**, затем в клиенте откройте вкладку «Алгоритмы» → папка **MBsupport**. Клон должен быть запущен; мастер — выключен.
+После первой записи, если ядро не подхватило файл, перезапустите `./MTCore` один раз.
 
 ---
 
@@ -144,17 +146,17 @@ python3 launcher.py stop
 | Команда | Что делает |
 |---|---|
 | `inspect` | разобрать локальный `algorithms.config` |
-| `plan` | показать план с ShotCore |
+| `plan` | показать план с ShotCore (D/TP/счёт) |
 | `apply --dry-run` | что будет создано, файл не менять |
-| `apply` | записать мастера + клоны на 3 ч |
-| `run` | то же, что `apply` (MT сам гасит клоны) |
+| `apply` | один проход: мастера + клоны |
+| `watch` / `run` | цикл каждые 15 с |
 | `stop` | удалить алгоритмы `SC *` |
 
 ---
 
 ## 7. Безопасность
 
-- Перед каждой записью создаётся `.bak-YYYYMMDD-HHMMSS` рядом с `algorithms.config`.
+- Перед каждой записью копируется `algorithms.config.bak-launcher`.
 - Скрипт удаляет только алгоритмы с префиксом `SC ` (задаётся `ALGO_PREFIX`).
 - Не ходит на торговый API биржи и не читает ключи MT.
 - Файл `.env` и `state.json` в git не коммитятся.
@@ -165,8 +167,14 @@ python3 launcher.py stop
 
 ## 8. Типичные проблемы
 
-**Нет связи с ShotCore**  
-С сервера MT: `curl http://IP:4861/health` и `curl http://IP:4861/api/mt-plan`. Фаервол 4861/tcp. Если задан `WEB_TOKEN` — заголовок `X-Shot-Token` или `?token=`.
+**Нет связи с ShotCore / 404**  
+В `.env` нужен IP **сервера ShotCore**, не `127.0.0.1` (если MT на другой машине):
+
+```
+SHOTCORE_URL=http://IP-ShotCore:4861
+```
+
+С сервера MT: `curl -sS http://IP-ShotCore:4861/health` (должно быть `ok`) и `curl -sS http://IP-ShotCore:4861/api/mt-plan`. Фаервол 4861/tcp. Если задан `WEB_TOKEN` — `SHOTCORE_TOKEN` тот же. Если `/health` = ok, а `/api/mt-plan` = 404 — на ShotCore устаревший контейнер: `docker compose up -d --build --force-recreate`.
 
 **План пустой / 0 selected**  
 На дашборде ещё нет рекомендаций, или `SUBSCRIBED_ONLY=true`, а пары не в топ-25 по 1ч Δ.

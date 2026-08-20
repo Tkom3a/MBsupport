@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 import json
-import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
 from .config import public_filters
-from .okx_rest import OkxRest
 
 if TYPE_CHECKING:
     from .main import ShotCore
@@ -28,7 +25,6 @@ def build_app(core: ShotCore) -> web.Application:
     app.router.add_get("/api/status", _status)
     app.router.add_get("/api/stats", _stats)
     app.router.add_get("/api/shots", _shots)
-    app.router.add_get("/api/chart", _chart)
     app.router.add_get("/api/mt-plan", _mt_plan)
     if WEB_DIR.is_dir():
         app.router.add_static("/static", WEB_DIR)
@@ -61,12 +57,6 @@ def _auth_middleware(core: ShotCore):
 
 async def _health(_request: web.Request) -> web.Response:
     return web.Response(text="ok")
-
-
-_chart_cache: dict[str, tuple[float, dict[str, Any]]] = {}
-_chart_lock: asyncio.Lock | None = None
-_CHART_TTL = 90.0
-_CHART_MAX = 24
 
 
 def _file(name: str) -> web.StreamResponse:
@@ -147,61 +137,11 @@ async def _shots(request: web.Request) -> web.Response:
     )
 
 
-def _get_chart_lock() -> asyncio.Lock:
-    global _chart_lock
-    if _chart_lock is None:
-        _chart_lock = asyncio.Lock()
-    return _chart_lock
-
-
-async def _chart(request: web.Request) -> web.Response:
-    core: ShotCore = request.app["core"]
-    symbol = str(request.rel_url.query.get("symbol") or "").strip().upper()
-    ts = _int(request, "ts", 0)
-    if not symbol or ts <= 0:
-        return web.Response(status=400, text="Need symbol and ts")
-    key = f"{symbol}:{ts // 1000}"
-    now = time.monotonic()
-    cached = _chart_cache.get(key)
-    if cached and now - cached[0] < _CHART_TTL:
-        return _json(cached[1])
-
-    async with _get_chart_lock():
-        cached = _chart_cache.get(key)
-        if cached and time.monotonic() - cached[0] < _CHART_TTL:
-            return _json(cached[1])
-        shot_row = core.store.find_shot(symbol, ts)
-        shot = core.store.as_public(shot_row) if shot_row else {
-            "symbol": symbol,
-            "peak_ts": ts,
-            "percent": 0,
-            "direction": "",
-        }
-        path = (shot_row or {}).get("path") or []
-        candles: list[dict[str, Any]] = []
-        if len(path) < 5 and core._session is not None:
-            rest = OkxRest(core.cfg, core._session)
-            try:
-                _bar, candles = await rest.fetch_candles_around(symbol, ts)
-            except Exception:
-                candles = []
-        payload = {"bar": "tick", "candles": candles, "shot": shot}
-        if shot_row:
-            payload["shot"]["path"] = path
-            payload["shot"]["distance_report"] = shot_row.get("distance_report") or []
-        if candles or payload["shot"].get("path"):
-            _chart_cache[key] = (time.monotonic(), payload)
-            if len(_chart_cache) > _CHART_MAX:
-                oldest = sorted(_chart_cache.items(), key=lambda item: item[1][0])[: len(_chart_cache) - _CHART_MAX]
-                for drop, _value in oldest:
-                    _chart_cache.pop(drop, None)
-        return _json(payload)
-
-
 async def _mt_plan(request: web.Request) -> web.Response:
     core: ShotCore = request.app["core"]
+    lookback = _int(request, "lookback", core.cfg.web.stats_lookback_min)
     plan = core.store.build_mt_plan(
-        lookback_min=core.cfg.web.stats_lookback_min,
+        lookback_min=lookback,
         subscribed=set(core.active_symbols),
         run_hours=core.cfg.output.mt_run_hours,
     )

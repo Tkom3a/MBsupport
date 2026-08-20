@@ -54,7 +54,7 @@ class ShotStore:
         hints_name: str,
         tz_name: str = "UTC",
         distance_levels: list[float] | None = None,
-        retain_hours: int = 48,
+        retain_hours: int = 24,
         tp_min_pct: float = 0.3,
         hold_ms: int = 300,
         suggest_inside_pct: float = 0.05,
@@ -77,11 +77,17 @@ class ShotStore:
         self.suggest_inside_pct = max(float(suggest_inside_pct), 0.0)
         self.events: deque[dict[str, Any]] = deque(maxlen=50_000)
         self.total = 0
+        self._stats_memo: tuple[Any, dict[str, Any]] | None = None
         self._ensure_csv()
-        skipped = self._load_existing()
-        if skipped:
+        skipped, dropped_paths = self._load_existing()
+        if skipped or dropped_paths:
             self._rewrite_files()
-            log.info("Dropped %s shots older than %sh on load", skipped, self.retain_hours)
+            log.info(
+                "Dropped %s shots older than %sh, stripped tick paths from %s",
+                skipped,
+                self.retain_hours,
+                dropped_paths,
+            )
 
     def _ensure_csv(self) -> None:
         if self.csv_path.exists():
@@ -95,12 +101,13 @@ class ShotStore:
         with self.csv_path.open("w", newline="", encoding="utf-8") as fh:
             csv.DictWriter(fh, fieldnames=CSV_FIELDS).writeheader()
 
-    def _load_existing(self) -> int:
+    def _load_existing(self) -> tuple[int, int]:
         source = self.jsonl_path if self.jsonl_path.exists() else self.csv_path
         if not source.exists():
-            return 0
+            return 0, 0
         loaded = 0
         skipped = 0
+        dropped_paths = 0
         cutoff = _cutoff_ms(self.retain_hours)
         try:
             if source.suffix == ".jsonl":
@@ -116,6 +123,8 @@ class ShotStore:
                         if event["peak_ts"] < cutoff:
                             skipped += 1
                             continue
+                        if row.get("path"):
+                            dropped_paths += 1
                         self.events.append(event)
                         loaded += 1
             else:
@@ -134,7 +143,7 @@ class ShotStore:
             log.info("Loaded %s historic shots from %s (skipped %s older than %sh)", loaded, source.name, skipped, self.retain_hours)
         except Exception as exc:
             log.warning("Could not load historic shots: %s", exc)
-        return skipped
+        return skipped, dropped_paths
 
     def write(self, event: ShotEvent) -> dict[str, Any]:
         when = datetime.fromtimestamp(event.peak_ts / 1000, tz=timezone.utc)
@@ -166,11 +175,11 @@ class ShotStore:
             "fill_ts": event.fill_ts,
             "fill_price": event.fill_price,
             "start_ts": event.start_ts,
-            "path": event.path,
         }
         stored = _row_to_event(row)
         if stored:
             self.events.append(stored)
+        self._stats_memo = None
         with self.csv_path.open("a", newline="", encoding="utf-8") as fh:
             csv.DictWriter(fh, fieldnames=CSV_FIELDS, extrasaction="ignore").writerow(row)
         with self.jsonl_path.open("a", encoding="utf-8") as fh:
@@ -183,7 +192,6 @@ class ShotStore:
                         "fill_ts": event.fill_ts,
                         "fill_price": event.fill_price,
                         "start_ts": event.start_ts,
-                        "path": event.path,
                     },
                     ensure_ascii=False,
                 )
@@ -220,6 +228,16 @@ class ShotStore:
 
     def stats(self, lookback_min: int = 0, direction: str = "", only_btc_calm: bool = False) -> dict[str, Any]:
         items = self._filtered(lookback_min, direction, only_btc_calm)
+        memo_key = (
+            lookback_min,
+            direction,
+            only_btc_calm,
+            len(items),
+            int(items[-1]["peak_ts"]) if items else 0,
+            self.total,
+        )
+        if self._stats_memo and self._stats_memo[0] == memo_key:
+            return dict(self._stats_memo[1])
         grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for item in items:
             grouped[item["symbol"]].append(item)
@@ -235,7 +253,6 @@ class ShotStore:
             suggest, plus_n, minus_n, win_prob, suggest_tp = _recommend_and_score(
                 shots, self.hold_ms, self.suggest_inside_pct, self.distance_levels
             )
-            _, level_stats = _best_distance(shots, self.distance_levels)
             rows.append(
                 {
                     "symbol": symbol,
@@ -259,7 +276,6 @@ class ShotStore:
                     "vplus": plus_n,
                     "vplus_rate": win_prob,
                     "avg_pnl": round(statistics.fmean(pnls), 4) if pnls else 0.0,
-                    "levels": level_stats,
                     "last_percent": round(float(last["percent"]), 4),
                     "last_direction": last["direction"],
                     "last_vplus": bool(last["vplus"]),
@@ -271,7 +287,7 @@ class ShotStore:
         rows.sort(key=lambda row: (row["count"], row["last_ts"]), reverse=True)
         all_pct = [float(x["percent"]) for x in items]
         vplus_n = sum(1 for x in items if x["vplus"])
-        return {
+        payload = {
             "lookback_min": lookback_min,
             "shots": len(items),
             "pairs": len(rows),
@@ -281,6 +297,8 @@ class ShotStore:
             "hold_ms": items[-1]["hold_ms"] if items else 300,
             "rows": rows,
         }
+        self._stats_memo = (memo_key, payload)
+        return dict(payload)
 
     def write_hints(
         self,
@@ -343,7 +361,7 @@ class ShotStore:
                     "tp_pct": tp,
                     "hold_ms": hold_ms,
                     "run_hours": hours,
-                    "lever": round(float(row.get("lever") or 0), 1),
+                    "lever": int(round(float(row.get("lever") or 0))),
                     "subscribed": symbol in active if active else False,
                     "count": int(row.get("count") or 0),
                     "score_plus": int(row.get("score_plus") or 0),
@@ -428,22 +446,6 @@ class ShotStore:
             out.append(item)
         return out
 
-    def find_shot(self, symbol: str, peak_ts: int) -> dict[str, Any] | None:
-        needle = (symbol or "").upper()
-        best: dict[str, Any] | None = None
-        best_dt = 15_000
-        for item in self.events:
-            if str(item.get("symbol") or "").upper() != needle:
-                continue
-            delta = abs(int(item["peak_ts"]) - int(peak_ts))
-            if delta < best_dt:
-                best_dt = delta
-                best = item
-        return best
-
-    def as_public(self, item: dict[str, Any]) -> dict[str, Any]:
-        return _public_event(item, self.tz)
-
     def prune(self) -> int:
         cutoff = _cutoff_ms(self.retain_hours)
         kept = [item for item in self.events if item["peak_ts"] >= cutoff]
@@ -452,6 +454,7 @@ class ShotStore:
             return 0
         self.events = deque(kept, maxlen=50_000)
         self.total = len(self.events)
+        self._stats_memo = None
         self._rewrite_files()
         log.info("Retention: removed %s shots older than %sh, kept %s", dropped, self.retain_hours, self.total)
         return dropped
@@ -493,7 +496,6 @@ class ShotStore:
                             "fill_ts": int(item.get("fill_ts") or 0),
                             "fill_price": float(item.get("fill_price") or 0),
                             "start_ts": int(item.get("start_ts") or 0),
-                            "path": item.get("path") or [],
                         },
                         ensure_ascii=False,
                     )
@@ -607,42 +609,12 @@ def _candidate_tps() -> list[float]:
     return [round(step * 0.05, 2) for step in range(2, 41)]
 
 
-def _fill_mfe(shot: dict[str, Any], distance: float, hold_ms: int) -> tuple[float, float] | None:
+def _fill_mfe(shot: dict[str, Any], distance: float, _hold_ms: int) -> tuple[float, float] | None:
     """Возвращает (pnl по времени 0.3с, MFE %) после заполнения ордера на distance, либо None."""
     start = float(shot.get("start_price") or 0)
     pct = float(shot.get("percent") or 0)
-    direction = str(shot.get("direction") or "").upper()
     if start <= 0 or distance <= 0 or pct + 1e-9 < distance:
         return None
-    fill_px = start * (1.0 - distance / 100.0) if direction == "DOWN" else start * (1.0 + distance / 100.0)
-    path = shot.get("path") or []
-    start_ts = int(shot.get("start_ts") or 0)
-    fill_ts = 0
-    exit_px = fill_px
-    mfe = 0.0
-    for pt in path:
-        if not isinstance(pt, (list, tuple)) or len(pt) < 2:
-            continue
-        ts = float(pt[0])
-        px = float(pt[1])
-        if px <= 0:
-            continue
-        if fill_ts <= 0:
-            if start_ts and ts + 1e-9 < start_ts:
-                continue
-            crossed = (direction == "DOWN" and px <= fill_px) or (direction == "UP" and px >= fill_px)
-            if crossed:
-                fill_ts = int(ts)
-                exit_px = px
-                mfe = max(mfe, _pnl_from_fill(direction, fill_px, px))
-            continue
-        if ts > fill_ts + hold_ms:
-            break
-        exit_px = px
-        mfe = max(mfe, _pnl_from_fill(direction, fill_px, px))
-    if fill_ts > 0:
-        time_pnl = _pnl_from_fill(direction, fill_px, exit_px)
-        return time_pnl, max(mfe, time_pnl, 0.0)
     for row in shot.get("distance_report") or []:
         if abs(float(row.get("distance") or 0) - distance) > 1e-6:
             continue
@@ -657,14 +629,6 @@ def _fill_mfe(shot: dict[str, Any], distance: float, hold_ms: int) -> tuple[floa
         bounce = float(shot.get("rollback_pct") or 0)
         return time_pnl, max(time_pnl, bounce, 0.0)
     return None
-
-
-def _pnl_from_fill(direction: str, fill_px: float, px: float) -> float:
-    if fill_px <= 0:
-        return 0.0
-    if direction == "DOWN":
-        return (px - fill_px) / fill_px * 100.0
-    return (fill_px - px) / fill_px * 100.0
 
 
 def _best_distance(shots: list[dict[str, Any]], levels: list[float]) -> tuple[float, list[dict[str, Any]]]:
@@ -837,7 +801,6 @@ def _row_to_event(row: dict[str, Any]) -> dict[str, Any] | None:
             "exit_price": float(row.get("exit_price") or 0),
             "fill_ts": int(float(row.get("fill_ts") or 0)),
             "fill_price": float(row.get("fill_price") or 0),
-            "path": _as_path(row.get("path")),
         }
     except (TypeError, ValueError):
         return None
@@ -846,39 +809,7 @@ def _row_to_event(row: dict[str, Any]) -> dict[str, Any] | None:
 def _as_bool(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip() in {"1", "true", "True"}
-    return bool(value)
-
-
-def _as_path(value: Any) -> list[list[float]]:
-    if isinstance(value, str) and value:
-        try:
-            value = json.loads(value)
-        except json.JSONDecodeError:
-            return []
-    if not isinstance(value, list):
-        return []
-    out: list[list[float]] = []
-    for pt in value:
-        if not isinstance(pt, (list, tuple)) or len(pt) < 2:
-            continue
-        try:
-            ts, px = float(pt[0]), float(pt[1])
-        except (TypeError, ValueError):
-            continue
-        if ts > 0 and px > 0:
-            row = [ts, px]
-            if len(pt) >= 3:
-                try:
-                    row.append(float(pt[2]))
-                except (TypeError, ValueError):
-                    row.append(0.0)
-            if len(pt) >= 4:
-                try:
-                    row.append(float(pt[3]))
-                except (TypeError, ValueError):
-                    row.append(0.0)
-            out.append(row)
-    return out
+        return bool(value)
 
 
 def _parse_ts(value: str) -> int:

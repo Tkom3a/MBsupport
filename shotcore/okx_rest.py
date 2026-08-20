@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -106,56 +105,6 @@ class OkxRest:
         if last_error:
             log.debug("candles %s failed: %s", inst_id, last_error)
         return []
-
-    async def fetch_candles_around(self, inst_id: str, ts_ms: int) -> tuple[str, list[dict[str, Any]]]:
-        """One cheap window around a shot. Prefer 1s; fall back to 1m. No background work."""
-        now = int(time.time() * 1000)
-        age = now - ts_ms
-        specs = (
-            ("1s", 100, 40_000, 55_000),
-            ("1m", 80, 40 * 60_000, 20 * 60_000),
-        )
-        for bar, limit, before_ms, after_ms in specs:
-            history = age > before_ms + after_ms + 5_000
-            after = ts_ms + after_ms
-            if age < 90_000 and bar == "1s":
-                rows = await self.fetch_candles(inst_id, bar=bar, limit=limit, history=False)
-            else:
-                rows = await self.fetch_candles(inst_id, bar=bar, limit=limit, after=after, history=history)
-                if not rows and history:
-                    rows = await self.fetch_candles(inst_id, bar=bar, limit=limit, after=after, history=False)
-            parsed = parse_okx_candles(rows)
-            lo, hi = ts_ms - before_ms, ts_ms + after_ms
-            windowed = [row for row in parsed if lo <= row["ts"] <= hi]
-            chosen = windowed or parsed
-            if len(chosen) >= 3:
-                return bar, chosen
-        return "1s", []
-
-
-def parse_okx_candles(rows: list[Any]) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for row in rows:
-        try:
-            item = {
-                "ts": int(float(row[0])),
-                "o": float(row[1]),
-                "h": float(row[2]),
-                "l": float(row[3]),
-                "c": float(row[4]),
-                "vol": float(row[5]) if len(row) > 5 else 0.0,
-                "vol_ccy": float(row[6]) if len(row) > 6 else 0.0,
-                "vol_quote": float(row[7]) if len(row) > 7 else 0.0,
-            }
-        except (TypeError, ValueError, IndexError):
-            continue
-        if item["h"] < item["l"] or item["o"] <= 0:
-            continue
-        if item["vol_quote"] <= 0 and item["vol_ccy"] > 0:
-            item["vol_quote"] = item["vol_ccy"] * item["c"]
-        out.append(item)
-    out.sort(key=lambda row: row["ts"])
-    return out
 
 
 def apply_market_filters(

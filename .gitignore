@@ -10,3 +10,4 @@ _tmp_*.py
 mt_launcher/.env
 mt_launcher/state.json
 mt_launcher/*.bak*
+mbsupport-launcher-state.json

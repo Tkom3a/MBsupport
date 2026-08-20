@@ -234,7 +234,7 @@ def purge_old_logs(log_dir: Path, retain_hours: int) -> int:
     return removed
 
 
-def setup_logging(log_dir: Path, retain_hours: int = 48) -> None:
+def setup_logging(log_dir: Path, retain_hours: int = 24) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -242,7 +242,7 @@ def setup_logging(log_dir: Path, retain_hours: int = 48) -> None:
     except Exception:
         pass
     log_path = log_dir / "shotcore.log"
-    max_bytes = 40 * 1024 * 1024
+    max_bytes = 8 * 1024 * 1024
     if log_path.exists() and log_path.stat().st_size > max_bytes:
         stamped = log_dir / ("shotcore.log." + time.strftime("%Y-%m-%d") + ".old")
         try:
@@ -255,7 +255,7 @@ def setup_logging(log_dir: Path, retain_hours: int = 48) -> None:
     root.setLevel(logging.INFO)
     stream = logging.StreamHandler()
     stream.setFormatter(fmt)
-    backups = max(2, int(retain_hours / 24) + 1)
+    backups = 1
     file_handler = TimedRotatingFileHandler(
         log_path,
         when="midnight",
