@@ -72,9 +72,10 @@ class ShotTrader:
 
     async def _start_web(self) -> web.AppRunner:
         auth_cfg = load_auth_config(brand="ShotTrader", token_fallback=self.cfg.web_token)
-        app = web.Application(middlewares=make_middlewares(auth_cfg, api_token=self.cfg.web_token))
+        api_token = auth_cfg.resolve_api_token(self.cfg.web_token)
+        app = web.Application(middlewares=make_middlewares(auth_cfg, api_token=api_token))
         app["core"] = self
-        attach_auth(app, auth_cfg, api_token=self.cfg.web_token)
+        attach_auth(app, auth_cfg, api_token=api_token)
         app.router.add_get("/", self._index)
         app.router.add_get("/health", self._health)
         app.router.add_get("/api/state", self._state)
@@ -131,7 +132,11 @@ class ShotTrader:
     async def _set_shotcore(self, request: web.Request) -> web.Response:
         body = await request.json()
         url = self._apply_shotcore_url(str(body.get("url") or body.get("shotcore_url") or ""))
-        return web.json_response({"ok": True, "shotcore_url": url})
+        token = str(body.get("token") or body.get("shotcore_token") or "").strip()
+        if token:
+            self.cfg.shotcore_token = token
+            self.engine.note("ShotCore token задан (для /api/mt-plan)")
+        return web.json_response({"ok": True, "shotcore_url": url, "has_token": bool(self.cfg.shotcore_token)})
 
     def _apply_shotcore_url(self, raw: str) -> str:
         url = (raw or "").strip().rstrip("/")
@@ -193,14 +198,20 @@ class ShotTrader:
     async def _fetch_plan(self) -> dict[str, Any]:
         assert self.session is not None
         params = {"lookback": str(self.cfg.lookback_min)}
-        headers = {}
-        if self.cfg.shotcore_token:
-            headers["X-Shot-Token"] = self.cfg.shotcore_token
-            params["token"] = self.cfg.shotcore_token
+        headers: dict[str, str] = {}
+        token = (self.cfg.shotcore_token or "").strip()
+        if token:
+            headers["X-Shot-Token"] = token
+            params["token"] = token
         url = f"{self.cfg.shotcore_url}/api/mt-plan?{urlencode(params)}"
         async with self.session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=12)) as resp:
             if resp.status != 200:
                 text = await resp.text()
+                if resp.status == 401:
+                    raise RuntimeError(
+                        "401 unauthorized — задайте одинаковый WEB_TOKEN/SHOTCORE_TOKEN "
+                        f"(или SESSION_SECRET) на ShotCore и ShotTrader. {text[:120]}"
+                    )
                 raise RuntimeError(f"{resp.status} {text[:200]}")
             return await resp.json()
 

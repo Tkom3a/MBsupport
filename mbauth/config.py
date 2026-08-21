@@ -30,6 +30,21 @@ class AuthConfig:
     def enabled(self) -> bool:
         return self.mode in {"local", "ldap"} and bool(self.session_secret)
 
+    def resolve_api_token(self, explicit: str = "") -> str:
+        """Token for machine clients (ShotTrader, mt_launcher): X-Shot-Token / ?token=."""
+        for candidate in (
+            (explicit or "").strip(),
+            (os.getenv("WEB_TOKEN") or "").strip(),
+            (os.getenv("AUTH_API_TOKEN") or "").strip(),
+            (os.getenv("SHOTCORE_TOKEN") or "").strip(),
+        ):
+            if candidate:
+                return candidate
+        # When login auth is on and no WEB_TOKEN — allow SESSION_SECRET as service token
+        if self.enabled and self.session_secret and self.session_secret != "mbauth-dev-change-me":
+            return self.session_secret
+        return ""
+
 
 def _parse_users(raw: str) -> dict[str, str]:
     out: dict[str, str] = {}

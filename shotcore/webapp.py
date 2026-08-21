@@ -19,9 +19,10 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 
 def build_app(core: ShotCore) -> web.Application:
     auth_cfg = load_auth_config(brand="ShotCore", token_fallback=core.cfg.web.token)
-    app = web.Application(middlewares=make_middlewares(auth_cfg, api_token=core.cfg.web.token))
+    api_token = auth_cfg.resolve_api_token(core.cfg.web.token)
+    app = web.Application(middlewares=make_middlewares(auth_cfg, api_token=api_token))
     app["core"] = core
-    attach_auth(app, auth_cfg, api_token=core.cfg.web.token)
+    attach_auth(app, auth_cfg, api_token=api_token)
     app.router.add_get("/", _index)
     app.router.add_get("/health", _health)
     app.router.add_get("/favicon.ico", _favicon_ico)

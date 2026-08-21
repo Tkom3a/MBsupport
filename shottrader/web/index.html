@@ -201,10 +201,13 @@
       return res.json();
     }
 
-    // Подтянуть URL ShotCore из вкладки (?core=) — иначе план идёт на 127.0.0.1 из .env
+    // Подтянуть URL ShotCore (+ token) из вкладки
     api("/api/shotcore", {
       method: "POST",
-      body: JSON.stringify({ url: coreUrl.replace(/\/$/, "") }),
+      body: JSON.stringify({
+        url: coreUrl.replace(/\/$/, ""),
+        token: qs.get("token") || "",
+      }),
     }).catch(() => {});
 
     fetch("/api/auth/status").then((r) => r.json()).then((s) => {
