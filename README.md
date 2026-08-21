@@ -1,291 +1,417 @@
-# ShotCore
+# ShotCore + ShotTrader
 
-Разведка под стратегию Shot: заранее стоящий лимит на максимальном плече (x20–x100), вход на простреле, закрытие **через 0.3 с в противоположную сторону**. Один импульс пишется **один раз**. Подписка только на активные рынки, отобранные так же, как фильтр MoonTrader (1ч Δ + 15м оΔ, max 25, ignore first 2, sort 15 s).
+Софт для стратегии **Shot** на фьючерсах OKX (USDT-SWAP):
 
-Ядро не ставит ордера и не ходит в торговый API. Оно смотрит публичную ленту OKX и отвечает на два вопроса:
+1. **ShotCore** — разведка. Смотрит публичную ленту сделок, ловит «прострелы» и считает, на какой дистанции ставить лимит (отдельно для BUY и SHORT).
+2. **ShotTrader** — терминал. Берёт рекомендации ShotCore и ставит ордера (сначала виртуально, живую торговлю можно включить отдельно).
 
-1. по каким парам вообще были прострелы;
-2. на каком Distance ставить лимит, чтобы после удержания 0.3 с чаще выходить в плюс.
+MoonTrader **не нужен**. Ключи биржи для разведки **не нужны**.
 
-- Дашборд: `http://IP:4861/`
-- История: `data/shots.csv`
-- Сводка: `data/distance_hints.csv` (`suggest_distance`, `vplus_rate`)
-
----
-
-## Стратегия, которую считает ядро
-
-1. Берётся опорная цена до импульса.
-2. Прострел DOWN заполняет заранее стоящий **BUY** на дистанции D%. Прострел UP — **SELL**.
-3. Через `HOLD_MS` (по умолчанию 300 мс) позиция закрывается противоположной стороной.
-4. **В плюс**, если PnL > `VPLUS_MIN_PNL` (считается внутри, на странице не показывается).
-
-По каждой паре перебираются дистанции из `DISTANCE_LEVELS` (как в вашем MT: 1.11 / 1.32 / 1.42 / 1.63 / 1.78). В колонке «Дистанция ордера» — уровень, на котором симуляция чаще закрывалась в плюс.
+| Что | Адрес |
+|---|---|
+| Разведка ShotCore | http://IP:4861/ |
+| Терминал ShotTrader | http://IP:4863/ |
 
 ---
 
-## Что умеет
+## Как это работает простыми словами
 
-1. Подписывается на ленту сделок OKX (`wss://ws.okx.com:8443/ws/v5/public`).
-2. Отбирает пары фильтрами как в MT Shot: QAV 24h, шаг цены, mark price, плечо, whitelist/blacklist.
-3. Ловит прострел ≥ `SHOT_MIN_PERCENT` **один раз на импульс**, меряет глубину и откат.
-4. Симулирует вход на каждой дистанции из `.env` и выход через 0.3 с.
-5. Показывает активные рынки (как в MT), плечо пары, дистанцию ордера и ленту событий.
-
----
-
-## Требования
-
-**Вариант A — Docker (рекомендуется)**
-
-- Docker 24+
-- Docker Compose v2 (`docker compose`)
-
-**Вариант B — Python**
-
-- Python 3.10+
-- доступ в интернет до `www.okx.com` и `ws.okx.com:8443`
-
-Открой входящий TCP-порт дашборда (по умолчанию **4861**) в фаерволе ВМ, если заходишь с другого компьютера.
-
----
-
-## 1. Первый запуск (Docker)
-
-```bash
-git clone git@gitlab.com:<группа-или-логин>/MBsupport.git
-cd MBsupport
-
-cp .env.example .env
-nano .env          # или vim / notepad
-
-docker compose up -d --build
-docker compose ps
-docker compose logs -f --tail=50
+```
+OKX (публичные сделки)
+        ↓
+   ShotCore :4861     ← смотрит рынок, пишет прострелы, считает D% и TP%
+        ↓ план раз в минуту
+   ShotTrader :4863   ← ставит BUY/SHORT, закрывает по TP (≥ 0.3%) или через 0.3 с
 ```
 
-Страница: **http://IP-сервера:4861/**
+- Прострел **вниз (DOWN)** → лимит **BUY** на своей дистанции.
+- Прострел **вверх (UP)** → лимит **SHORT** на своей дистанции.
+- Рекомендация появляется, только если по симуляции плюсовых сделок **не меньше 70%**.
+- TP ниже **0.3%** отбрасывается.
+- По умолчанию ShotTrader в **эмуляции**: ордера на биржу не уходят.
 
-Проверка, что ядро живо:
+---
+
+## Что нужно установить
+
+Выберите один способ.
+
+### Способ A — Docker (проще)
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows / macOS) или Docker Engine + Compose на Linux
+- Интернет до `www.okx.com` и `wss://ws.okx.com:8443`
+
+### Способ B — Python
+
+- Python **3.10+**
+- Интернет до OKX
+
+Откройте порты **4861** и **4863**, если заходите с другого компьютера.
+
+---
+
+## Быстрый старт (Docker)
+
+Всё из **корня** репозитория.
+
+### 1. Скачать код
+
+```bash
+git clone https://github.com/<ваш-логин>/<репозиторий>.git
+cd <репозиторий>
+```
+
+### 2. Создать файлы настроек
+
+```bash
+cp .env.example .env
+cp shottrader/.env.example shottrader/.env
+```
+
+На Windows в PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+Copy-Item shottrader\.env.example shottrader\.env
+```
+
+Пока **ничего не меняйте** — так софт сразу запустится в безопасном режиме (эмуляция, без пароля).
+
+### 3. Запустить
+
+```bash
+docker compose up -d --build
+```
+
+Подождать ~30–60 секунд, пока ShotCore подключится к OKX.
+
+### 4. Открыть в браузере
+
+- ShotCore: `http://127.0.0.1:4861/`
+- ShotTrader: `http://127.0.0.1:4863/`  
+  или вкладка **ShotTrader** на странице ShotCore
+
+Если открываете с другого ПК — вместо `127.0.0.1` подставьте IP сервера.
+
+### 5. Проверить, что живы
 
 ```bash
 curl http://127.0.0.1:4861/health
-curl http://127.0.0.1:4861/api/status
+curl http://127.0.0.1:4863/health
 ```
 
-Остановка:
+Должно ответить `ok`.
+
+Полезные команды:
 
 ```bash
-docker compose down
+docker compose ps                  # статус
+docker compose logs -f --tail=80   # логи
+docker compose down                # остановка (данные в папках data/ и logs/ останутся)
 ```
-
-Данные в `./data` и `./logs` контейнер не удаляет.
 
 ---
 
-## 2. Запуск без Docker
+## Запуск без Docker (Python)
 
 ```bash
-git clone git@gitlab.com:<группа-или-логин>/MBsupport.git
-cd MBsupport
+git clone https://github.com/<ваш-логин>/<репозиторий>.git
+cd <репозиторий>
 
 cp .env.example .env
+cp shottrader/.env.example shottrader/.env
+
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+```
 
+Два процесса (два окна терминала):
+
+**Окно 1 — разведка**
+
+```bash
 python -m shotcore
 ```
 
-Ядро читает `.env` и `config.yaml`. Значения из `.env` важнее yaml.
-
-Фоном через systemd (Linux):
+**Окно 2 — терминал**
 
 ```bash
-sudo mkdir -p /opt/shotcore
-sudo rsync -a --exclude .venv --exclude .git ./ /opt/shotcore/
-cd /opt/shotcore
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-sudo cp shotcore.service /etc/systemd/system/shotcore.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now shotcore
-sudo systemctl status shotcore
+python -m shottrader
+```
+
+В `shottrader/.env` оставьте:
+
+```env
+SHOTCORE_URL=http://127.0.0.1:4861
+```
+
+Если ShotCore на другой машине:
+
+```env
+SHOTCORE_URL=http://IP-сервера-ShotCore:4861
 ```
 
 ---
 
-## 3. Обновление (git pull + апдейт)
+## Минимальная настройка
 
-### Docker
+Два файла:
+
+| Файл | Для чего |
+|---|---|
+| `.env` | ShotCore (разведка, порт 4861) |
+| `shottrader/.env` | ShotTrader (терминал, порт 4863) |
+
+После правки `.env` перезапустите:
 
 ```bash
-cd MBsupport
-git pull origin main
+docker compose up -d --force-recreate
+```
 
-# если меняли только код/зависимости:
-docker compose up -d --build
+или перезапустите `python -m shotcore` / `python -m shottrader`.
 
-# если меняли .env — пересоздать контейнер:
+### Что можно не трогать
+
+Значения из примеров уже рабочие. Меняйте только то, что нужно вам.
+
+### Часовой пояс
+
+В обоих файлах:
+
+```env
+TZ=Europe/Moscow
+```
+
+От этого зависят лента, полночь (сброс статистики сделок) и отчёты за 7 дней.
+
+### Размер ордера и авто-стоп
+
+Это удобнее менять **в терминале ShotTrader** (слева: Order size, Плечо, Авто-стоп → **Применить**).
+
+Стартовые значения в `shottrader/.env`:
+
+```env
+MARGIN_USDT=10          # размер ордера, USDT уже с плечом
+DEFAULT_LEVERAGE=50
+AUTOSTOP_USD=10         # если сделка ≤ −этой суммы — всё снимается
+```
+
+### Если ShotTrader не видит рекомендации
+
+1. ShotCore должен быть открыт и уже накопить прострелы (обычно несколько минут).
+2. В `shottrader/.env` правильный `SHOTCORE_URL` — **тот же IP**, с которого вы открываете ShotCore в браузере (не `127.0.0.1`, если ядро на другом сервере).
+3. В Docker внутри сети по умолчанию уже стоит `http://shotcore:4861` — это нормально.
+
+---
+
+## Авторизация (по желанию)
+
+По умолчанию страницы **открыты**. Чтобы закрыть логином:
+
+### Простой пароль (без LDAP)
+
+В **корневом** `.env` (ShotCore):
+
+```env
+AUTH_MODE=local
+SESSION_SECRET=придумайте-длинную-строку
+AUTH_USERS=admin:ваш_пароль
+WEB_TOKEN=тот-же-секрет-для-API
+```
+
+В `shottrader/.env` (чтобы терминал мог читать план):
+
+```env
+AUTH_MODE=local
+SESSION_SECRET=придумайте-длинную-строку
+AUTH_USERS=admin:ваш_пароль
+SHOTCORE_TOKEN=тот-же-секрет-для-API
+```
+
+`SHOTCORE_TOKEN` должен совпадать с `WEB_TOKEN` у ShotCore. Это не пароль страницы терминала, а ключ для запроса `/api/mt-plan`.
+
+Вход: страница `/login`. Выход: ссылка **Выход**.
+
+### LDAP / Active Directory
+
+```env
+AUTH_MODE=ldap
+SESSION_SECRET=длинная-строка
+LDAP_URL=ldap://dc.company.local:389
+LDAP_BASE_DN=dc=company,dc=local
+LDAP_BIND_DN=cn=svc,ou=...,dc=company,dc=local
+LDAP_BIND_PASSWORD=...
+LDAP_USER_FILTER=(sAMAccountName={username})
+```
+
+Либо без поиска, сразу UPN:
+
+```env
+LDAP_USER_DN_TEMPLATE={username}@company.local
+```
+
+Опционально пускать только членов группы: `LDAP_REQUIRE_GROUP=ShotTraders`.
+
+### Только токен, без формы логина
+
+ShotCore:
+
+```env
+AUTH_MODE=off
+WEB_TOKEN=секрет
+```
+
+Открывать так: `http://IP:4861/?token=секрет`.
+
+Страницу ShotTrader этот токен **не закрывает**. Чтобы закрыть терминал токеном, задайте отдельно `TRADER_TOKEN` в `shottrader/.env`.
+
+---
+
+## Живая торговля (LIVE) — осторожно
+
+Сначала походите в **эмуляции** (так и есть из коробки).
+
+Когда готовы к реальным ордерам, в `shottrader/.env`:
+
+```env
+EMULATE=false
+LIVE_TRADING=true
+OKX_API_KEY=
+OKX_SECRET_KEY=
+OKX_PASSPHRASE=
+OKX_SIMULATED=false
+```
+
+`OKX_SIMULATED=true` — demo-счёт OKX, не боевой.
+
+Ключи храните только в `.env`. Файл `.env` в git **не попадает**.
+
+Перезапуск:
+
+```bash
+docker compose up -d --force-recreate shottrader
+```
+
+---
+
+## Что видно в интерфейсе
+
+### ShotCore (`:4861`)
+
+- активные рынки;
+- рекомендации **BUY D** и **SHORT D** (разные дистанции на разные стороны);
+- TP не ниже 0.3%;
+- лента прострелов.
+
+### ShotTrader (`:4863`)
+
+- таблица ордеров онлайн (цена, BUY/SHORT, дистанции, сумма в сделке, +/− за сегодня);
+- слева: размер ордера, плечо, авто-стоп, Panic;
+- справа: план ShotCore, отчёт за 7 дней, журнал сделок (время, сторона, D, PnL).
+
+В полночь (по `TZ`) статистика «сегодня» обнуляется, предыдущие дни остаются в отчёте.
+
+---
+
+## Порты
+
+| Сервис | Порт |
+|---|---|
+| ShotCore | **4861** |
+| ShotTrader | **4863** |
+
+Сменить снаружи можно через `WEB_PORT` / `TRADER_PORT` в `.env` (внутри контейнера порты остаются 4861 и 4863).
+
+Фаервол Linux:
+
+```bash
+sudo ufw allow 4861/tcp
+sudo ufw allow 4863/tcp
+```
+
+---
+
+## Данные на диске
+
+Не удаляются при `docker compose down`:
+
+```
+data/shots.csv                 прострелы ShotCore
+data/mt_plan.json              актуальный план для терминала
+data/trader_journal.jsonl      сделки ShotTrader
+data/daily_reports.json        отчёты по дням (7 суток)
+logs/                          логи
+```
+
+История при обновлении кода **сохраняется**.
+
+---
+
+## Обновление с GitHub
+
+```bash
+cd <репозиторий>
+git pull
 docker compose up -d --build --force-recreate
 ```
 
-Проверка после апдейта:
+Без `--build` может остаться старый образ.
+
+Python:
 
 ```bash
-docker compose ps
-docker compose logs --tail=80 shotcore
-curl -s http://127.0.0.1:4861/api/status
-```
-
-Откат на предыдущий коммит, если что-то сломалось:
-
-```bash
-git log --oneline -5
-git checkout <hash>
-docker compose up -d --build --force-recreate
-```
-
-Потом вернитесь на `main`: `git checkout main && git pull && docker compose up -d --build`.
-
-### Python / systemd
-
-```bash
-cd MBsupport          # или /opt/shotcore
-git pull origin main
+git pull
 source .venv/bin/activate
 pip install -r requirements.txt
-# локальный запуск: Ctrl+C и снова python -m shotcore
-sudo systemctl restart shotcore    # если стоит unit
+# остановить старые процессы и снова:
+python -m shotcore
+python -m shottrader
 ```
 
-История прострелов в `data/` при обновлении **не затирается**.
-
 ---
 
-## 4. Настройка через `.env`
+## Если что-то не работает
 
-Скопируй `.env.example` → `.env` и правь. После сохранения:
+**Страница не открывается с другого компьютера**  
+В `.env`: `WEB_HOST=0.0.0.0`. Откройте порты 4861 и 4863.
 
-- Docker: `docker compose up -d --force-recreate`
-- Python: перезапусти процесс / `systemctl restart shotcore`
+**ShotTrader пустой, нет клонов**  
+Смотрите логи терминала. Частые причины:
+- ShotCore ещё не запущен или недоступен по `SHOTCORE_URL`;
+- `401 unauthorized` — задайте одинаковые `WEB_TOKEN` (ShotCore) и `SHOTCORE_TOKEN` (ShotTrader);
+- план пуст — нет пар с рекомендацией (мало прострелов или win rate &lt; 70%).
 
-| Переменная | Зачем |
-|---|---|
-| `WEB_HOST` / `WEB_PORT` | Адрес страницы. Снаружи удобно `0.0.0.0` и `4861` |
-| `WEB_TOKEN` | Machine-доступ API: `?token=` / `X-Shot-Token` (и для ShotTrader↔ShotCore) |
-| `AUTH_MODE` | `off` / `local` / `ldap` — логин в UI |
-| `AUTH_USERS` | При `local`: `user:pass,user2:pass2` |
-| `SESSION_SECRET` | Подпись cookie-сессии (желательно задать) |
-| `LDAP_URL` | При `ldap`: `ldap://dc:389` или `ldaps://dc:636` |
-| `TZ` | Часовой пояс ленты, например `Europe/Moscow` |
-| `STATS_LOOKBACK_MIN` | Окно статистики на странице, минуты. `0` = вся история |
-| `SHOT_WINDOWS_MS` | Окна детекции, мс, через запятую |
-| `SHOT_MIN_PERCENT` | Минимальный прострел, который пишем |
-| `HOLD_MS` | Удержание до закрытия в противоположную сторону, мс (у вас 300) |
-| `DISTANCE_LEVELS` | Дистанции ордеров для перебора, как Distance в MT |
-| `QAV_24H_MIN` / `QAV_24H_MAX` | Объём 24h в USDT |
-| `TICK_SIZE_PCT_MAX` | Отсечь «квадратные» монеты по шагу цены |
-| `MARK_DEV_PCT_MAX` | Допустимое отклонение mark price, % |
-| `MIN_LEVERAGE` / `MAX_LEVERAGE` | Коридор макс. плеча контракта, x20–x100 |
-| `ACTIVE_MAX_MARKETS` | Как «Макс. кол. рынков» в MT, по умолчанию 25 |
-| `ACTIVE_IGNORE_FIRST` | Как «Игнорировать первые», по умолчанию 2 |
-| `ACTIVE_SORT_SEC` | Как «Частота сортировки», по умолчанию 15 |
-| `SHOT_REFRACTORY_MS` | Пауза после фиксации прострела, чтобы не резать один импульс пачками |
-| `WHITELIST` | Пары OKX через запятую, пусто = все прошедшие фильтры |
-| `BLACKLIST` | Исключить пары |
-| `BTC_WINDOW_SEC` / `BTC_RANGE_PCT` | Фильтр «спокойный BTC», как delta в MT |
-| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Опционально, алерты от `TELEGRAM_MIN_PERCENT` |
-
-Формат пар: `SOL-USDT-SWAP,DOGE-USDT-SWAP`.
-
-На странице можно дополнительно сузить окно (15 мин / 1 ч / 6 ч / 24 ч), сторону DOWN/UP и «только спокойный BTC» — это не требует перезапуска.
-
----
-
-## 5. Дашборд
-
-| URL | Что |
-|---|---|
-| `/` | Активные рынки как в MT, пары с прострелами, дистанция, плечо, лента |
-| `/api/status` | Сколько пар в подписке, фильтры |
-| `/api/stats` | JSON статистики |
-| `/api/mt-plan` | JSON для ядра MT: пара, рекомендация, TP, run_hours |
-| `/health` | `ok` для healthcheck |
-
-**Дистанция ордера** — уровень из `DISTANCE_LEVELS`, на котором симуляция «лимит → выход через 0.3 с» чаще в плюсе. Это значение ставьте в Distance алгоритма Shot. **Глубина p50/p90** — насколько реально улетал прострел. **Плечо** — максимальное доступное на паре (x20…x100).
-
-Фильтр активных рынков на странице совпадает с MoonTrader: **1ч Δ** (диапазон high−low за час) и **15м оΔ** ((last−open)/open за 15 минут). Список сортируется каждые 15 с по убыванию 1ч Δ, первые 2 отбрасываются, берутся следующие 25. Подписка на сделки — только эти 25 плюс BTC.
-
----
-
-## 6. Файлы на диске
-
-```
-data/shots.csv              события за последние 24 часа
-data/shots.jsonl            то же, без тиковых графиков
-data/distance_hints.csv     сводка: suggest_distance, vplus_rate, avg_pnl
-data/mt_plan.json           снимок для MT: пара, рекомендация, TP
-data/mt_plan.csv            то же построчно
-logs/shotcore.log           лог ядра (не старше суток)
-```
-
-В Docker эти каталоги примонтированы с хоста (`./data`, `./logs`).
-
----
-
-## 7. Свой терминал ShotTrader (вместо MT)
-
-Если MoonTrader не интегрируется — запускайте **ShotTrader**: UI в духе MT, тиковый график, размер/плечо, клоны на 3 часа по плану ShotCore, follow 1 с, TP или 0.3 с, авто-стоп −10$, отчёты час/сутки.
+**Контейнер постоянно Restarting**
 
 ```bash
-cd shottrader
-cp .env.example .env
-# SHOTCORE_URL=http://IP-ShotCore:4861
-python -m shottrader
-# UI: http://IP:4863/
+docker compose logs --tail=100 shotcore
+docker compose logs --tail=100 shottrader
 ```
 
-Или из корня: `docker compose up -d --build shottrader`. По умолчанию **эмуляция**. LIVE — только с ключами OKX (`LIVE_TRADING=true`). Подробнее: [`shottrader/README.md`](shottrader/README.md).
+Чаще всего нет `.env` или нет сети до OKX.
 
-Старый путь через `mt_launcher` → `algorithms.config` MoonTrader по-прежнему в [`mt_launcher/README.md`](mt_launcher/README.md).
+**Нет пар на дашборде**  
+Слишком жёсткий объём `QAV_24H_MIN` или опечатка в `WHITELIST`. Формат только `BTC-USDT-SWAP`, не `btcusdt`.
+
+**После git pull ничего не изменилось**  
+Нужен `--build`. Обновите страницу в браузере через Ctrl+F5.
 
 ---
 
-## 8. Типичные проблемы
-
-**Страница не открывается с другого ПК**  
-В `.env` должно быть `WEB_HOST=0.0.0.0`. Проверь фаервол: `sudo ufw allow 4861/tcp`.
-
-**Нет пар / 0 symbols**  
-Слишком жёсткий QAV или whitelist с опечаткой. Формат только `BTC-USDT-SWAP`, не `btcusdt`.
-
-**Контейнер Restarting**  
-`docker compose logs shotcore` — чаще всего нет `.env` (`cp .env.example .env`) или нет сети до OKX.
-
-**После `git pull` старое поведение**  
-Не забыли `--build`: без него Compose может поднять старый образ.
-
-**401 / страница входа**  
-Включён `AUTH_MODE=local|ldap` — войдите через `/login`.  
-Или задан только `WEB_TOKEN` — откройте `http://IP:4861/?token=значение_из_env`.
-
-**401 Need WEB_TOKEN** (старый режим без AUTH_MODE)  
-Задан `WEB_TOKEN`. Открой `http://IP:4861/?token=значение_из_env`.
-
----
-
-## 9. Структура репозитория
+## Состав репозитория
 
 ```
-Dockerfile
-docker-compose.yml
-.env.example
-config.yaml              запасные значения, если ключа нет в .env
+.env.example              настройки ShotCore (скопировать в .env)
+shottrader/.env.example   настройки ShotTrader
+docker-compose.yml        оба сервиса одной командой
+config.yaml               запасные значения, если ключа нет в .env
 requirements.txt
-shotcore.service         unit для Linux без Docker
-shotcore/                код ядра и web/
-mt_launcher/             скрипт: план ShotCore → алгоритмы MoonTrader
+shotcore/                 разведка + дашборд
+shottrader/               терминал
+mbauth/                   логин / LDAP
 ```
 
-Файл `.env` в git не коммитится.
+Файл `.env` и `shottrader/.env` в репозиторий не коммитить — там могут быть пароли и ключи биржи.
+
+В корне лежит **`.gitignore`**: git сам не возьмёт секреты, ключи, логи и папку `data/`. В репозиторий попадают только шаблоны `.env.example`. Перед `git add -A` всё равно гляньте `git status` — в список не должны попасть `.env`, ключи OKX и журналы сделок.

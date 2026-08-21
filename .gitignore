@@ -1,13 +1,104 @@
-__pycache__/
-.venv/
-venv/
-*.pyc
+# =============================================================================
+# Защита от случайного коммита секретов и мусора.
+# В git можно класть только шаблоны: .env.example (и **/.env.example).
+# =============================================================================
+
+# --- Секреты и настройки (пароли, токены, ключи OKX) ---
+.env
+.env.*
+!.env.example
+!**/.env.example
+*.env
+!*.env.example
+.envrc
+.env.local
+.env.production
+.env.live
+.env.bak
+.env.save
+.env.old
+.env.copy
+*.env.bak
+*.env.old
+*.env.save
+secrets.env
+.env.txt
+env.txt
+
+# Копии, которые делают Windows / редакторы
+*.env.copy
+* copy.env
+Copy of .env
+
+# Типичные файлы с ключами
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+credentials.json
+credentials.txt
+secrets.json
+secrets.txt
+okx_keys*
+*.secret
+*.token
+
+# Локальные оверлеи Docker (туда часто кладут ключи)
+docker-compose.override.yml
+docker-compose.*.yml
+!docker-compose.yml
+
+# --- Рабочие данные (сделки, прострелы, отчёты) ---
 data/
 logs/
-_tmp_*.py
-.env
 *.log
+
+# --- Состояние лаунчера MoonTrader ---
 mt_launcher/.env
 mt_launcher/state.json
 mt_launcher/*.bak*
 mbsupport-launcher-state.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# --- ОС и редакторы ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+*~
+*.bak
+*.orig
+*.tmp
+*.swp
+*.swo
+.idea/
+.vscode/
+*.code-workspace
+
+# --- Случайный мусор ---
+_tmp_*.py
+*.dump
+*.sqlite
+*.db
