@@ -79,6 +79,9 @@ class ShotTrader:
         attach_auth(app, auth_cfg, api_token=ui_token)
         app.router.add_get("/", self._index)
         app.router.add_get("/health", self._health)
+        app.router.add_get("/favicon.ico", self._favicon_ico)
+        app.router.add_get("/favicon.png", self._favicon_png)
+        app.router.add_get("/apple-touch-icon.png", self._apple_icon)
         app.router.add_get("/api/state", self._state)
         app.router.add_post("/api/settings", self._settings)
         app.router.add_post("/api/shotcore", self._set_shotcore)
@@ -103,6 +106,21 @@ class ShotTrader:
 
     async def _health(self, _request: web.Request) -> web.Response:
         return web.Response(text="ok")
+
+    def _web_file(self, name: str) -> web.StreamResponse:
+        path = WEB_DIR / name
+        if not path.is_file():
+            return web.Response(status=404, text="not found")
+        return web.FileResponse(path)
+
+    async def _favicon_ico(self, _request: web.Request) -> web.StreamResponse:
+        return self._web_file("favicon.ico")
+
+    async def _favicon_png(self, _request: web.Request) -> web.StreamResponse:
+        return self._web_file("favicon.png")
+
+    async def _apple_icon(self, _request: web.Request) -> web.StreamResponse:
+        return self._web_file("apple-touch-icon.png")
 
     async def _index(self, _request: web.Request) -> web.StreamResponse:
         path = WEB_DIR / "index.html"
