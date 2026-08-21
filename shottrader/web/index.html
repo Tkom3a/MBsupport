@@ -106,13 +106,12 @@
           <span class="nav-title">ShotCore<small>разведка</small></span>
         </a>
         <a class="on" href="/">
-          <span class="nav-title">ShotTrader<small>терминал · :4863</small></span>
+          <span class="nav-title">ShotTrader<small>терминал</small></span>
         </a>
       </nav>
       <span class="badge" id="modeBadge">эмуляция</span>
       <span class="badge" id="haltBadge" style="display:none">АВТО-СТОП</span>
       <div class="grow"></div>
-      <span id="planMeta" class="muted">план ShotCore…</span>
       <a id="linkLogout" href="/logout" class="muted" style="display:none;margin-left:10px;text-decoration:none">Выход</a>
     </div>
     <div class="main">
@@ -345,9 +344,6 @@
       document.getElementById("hour").textContent = `${state.hour.trades} (+${state.hour.plus || 0}/−${state.hour.minus || 0}) / ${money(state.hour.pnl_usd)}`;
       const td = state.today || state.day || {};
       document.getElementById("day").textContent = `${td.trades || 0} (+${td.plus || 0}/−${td.minus || 0}) / ${money(td.pnl_usd)}`;
-      document.getElementById("planMeta").textContent = state.plan_error
-        ? `ошибка плана: ${state.plan_error}`
-        : `план: ${(state.plan || []).length} · клонов: ${(state.markets || state.algos || []).length} · ${state.shotcore_url || ""}`;
       document.getElementById("boardMeta").textContent =
         `follow ${(state.follow_delay_ms || 1000) / 1000} с · hold ${(state.hold_ms || 300) / 1000} с`;
       document.getElementById("tickAge").textContent = new Date().toLocaleTimeString();
