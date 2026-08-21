@@ -230,18 +230,21 @@ logs/shotcore.log           лог ядра (не старше суток)
 
 ---
 
-## 7. Запуск алгоритмов в MoonTrader
+## 7. Свой терминал ShotTrader (вместо MT)
 
-На **сервере MTCore** контейнер `mt_launcher` каждые 15 с читает таблицу ShotCore (`/api/mt-plan?lookback=…`, те же Рекомендация / TP / Счет, что на морде) и держит клоны Shot Group в папке **MBsupport**. Order size = 10 USDT уже с плечом; min/max плеча — целые (x20 / x50). Если D/TP сменились или в счёте минус — старый клон снимается.
+Если MoonTrader не интегрируется — запускайте **ShotTrader**: UI в духе MT, тиковый график, размер/плечо, клоны на 3 часа по плану ShotCore, follow 1 с, TP или 0.3 с, авто-стоп −10$, отчёты час/сутки.
 
 ```bash
-cd mt_launcher
+cd shottrader
 cp .env.example .env
-nano .env          # SHOTCORE_URL=http://IP-ShotCore:4861
-docker compose up -d --build
+# SHOTCORE_URL=http://IP-ShotCore:4861
+python -m shottrader
+# UI: http://IP:4862/
 ```
 
-После записи перезапустите `./MTCore`. Полная инструкция: [`mt_launcher/README.md`](mt_launcher/README.md).
+Или из корня: `docker compose up -d --build shottrader`. По умолчанию **эмуляция**. LIVE — только с ключами OKX (`LIVE_TRADING=true`). Подробнее: [`shottrader/README.md`](shottrader/README.md).
+
+Старый путь через `mt_launcher` → `algorithms.config` MoonTrader по-прежнему в [`mt_launcher/README.md`](mt_launcher/README.md).
 
 ---
 

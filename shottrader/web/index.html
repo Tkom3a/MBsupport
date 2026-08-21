@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ShotTrader</title>
+  <style>
+    :root {
+      --bg: #0a0c10; --panel: #12161e; --line: #262c38; --text: #d7deea;
+      --muted: #8b95a8; --down: #e15b64; --up: #4fba7a; --amber: #d7a13b;
+      --chip: #1d2430; --buy: #2d6b4f; --sell: #7a2f38;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.35 "Segoe UI", system-ui, sans-serif; }
+    .app { display: grid; grid-template-rows: 42px 1fr 28px; height: 100%; }
+    .top {
+      display: flex; align-items: center; gap: 12px; padding: 0 12px;
+      background: #0e1218; border-bottom: 1px solid var(--line);
+    }
+    .brand { font-weight: 700; letter-spacing: 0.04em; }
+    .brand span { color: var(--amber); }
+    .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+    .badge.live { color: var(--down); border-color: #7a2f38; }
+    .badge.emu { color: var(--up); border-color: #2d6b4f; }
+    .badge.halt { color: #fff; background: #7a2f38; border-color: #7a2f38; }
+    .top .grow { flex: 1; }
+    .main { display: grid; grid-template-columns: 220px 1fr 280px; min-height: 0; }
+    .side, .right { background: var(--panel); border-right: 1px solid var(--line); overflow: auto; padding: 10px; }
+    .right { border-right: 0; border-left: 1px solid var(--line); }
+    h2 { margin: 0 0 8px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    label { display: block; color: var(--muted); font-size: 11px; margin: 8px 0 3px; }
+    input, select, button {
+      background: var(--chip); color: var(--text); border: 1px solid var(--line);
+      border-radius: 5px; padding: 6px 8px; font: inherit; width: 100%;
+    }
+    button { cursor: pointer; }
+    button.primary { background: #3a4a22; border-color: #5a7a32; }
+    button.danger { background: #3a2226; border-color: #7a323c; }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .kpi { background: #0e1218; border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin-bottom: 6px; }
+    .kpi .v { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .kpi .l { color: var(--muted); font-size: 11px; }
+    .center { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+    .chart-head {
+      display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+      border-bottom: 1px solid var(--line); background: #0e1218;
+    }
+    .chart-head b { font-size: 15px; }
+    .chart-wrap { flex: 1; min-height: 0; position: relative; background: #0b0e13; }
+    canvas { width: 100%; height: 100%; display: block; }
+    .tabs { display: flex; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+    .tab {
+      padding: 4px 8px; border-radius: 4px; border: 1px solid var(--line); cursor: pointer;
+      color: var(--muted); font-size: 12px; width: auto;
+    }
+    .tab.on { color: var(--text); background: #1c2430; border-color: #3a4a66; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { padding: 5px 6px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+    th { color: var(--muted); font-weight: 600; text-align: right; }
+    td:first-child, th:first-child { text-align: left; }
+    .log {
+      height: 180px; overflow: auto; background: #0b0e13; border: 1px solid var(--line);
+      border-radius: 6px; padding: 6px; font: 11px/1.4 ui-monospace, Consolas, monospace;
+    }
+    .foot {
+      display: flex; align-items: center; gap: 16px; padding: 0 12px;
+      border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; background: #0e1218;
+    }
+    .up { color: var(--up); } .down { color: var(--down); } .amber { color: var(--amber); }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="top">
+      <div class="brand">Shot<span>Trader</span></div>
+      <span class="badge" id="modeBadge">эмуляция</span>
+      <span class="badge" id="haltBadge" style="display:none">АВТО-СТОП</span>
+      <div class="grow"></div>
+      <span id="planMeta" class="muted">план ShotCore…</span>
+    </div>
+    <div class="main">
+      <aside class="side">
+        <h2>Управление</h2>
+        <label>Order size (USDT с плечом)</label>
+        <input id="orderSize" type="number" step="1" min="1" value="10" />
+        <label>Плечо</label>
+        <input id="leverage" type="number" step="1" min="1" value="50" />
+        <label>Авто-стоп, $</label>
+        <input id="autostop" type="number" step="0.5" min="0.5" value="10" />
+        <div class="row2" style="margin-top:10px">
+          <button class="primary" id="saveBtn">Применить</button>
+          <button class="danger" id="panicBtn">Panic</button>
+        </div>
+        <button id="resumeBtn" style="margin-top:6px">Снять авто-стоп</button>
+        <h2 style="margin-top:14px">Сессия</h2>
+        <div class="kpi"><div class="l">Нереализ.</div><div class="v" id="unreal">0.00$</div></div>
+        <div class="kpi"><div class="l">1 час · сделки / PnL</div><div class="v" id="hour">0 / 0$</div></div>
+        <div class="kpi"><div class="l">24 часа · сделки / PnL</div><div class="v" id="day">0 / 0$</div></div>
+        <h2 style="margin-top:14px">Лог</h2>
+        <div class="log" id="log"></div>
+      </aside>
+      <section class="center">
+        <div class="chart-head">
+          <b id="pairTitle">—</b>
+          <span id="pairMeta" class="muted"></span>
+          <div class="grow"></div>
+          <span>follow 1 с · hold 0.3 с</span>
+        </div>
+        <div class="tabs" id="tabs"></div>
+        <div class="chart-wrap"><canvas id="chart"></canvas></div>
+      </section>
+      <aside class="right">
+        <h2>Алгоритмы (3 ч)</h2>
+        <table>
+          <thead><tr><th>Пара</th><th>D</th><th>TP</th><th>Сост.</th><th>мин</th></tr></thead>
+          <tbody id="algos"></tbody>
+        </table>
+        <h2 style="margin-top:12px">План ShotCore</h2>
+        <table>
+          <thead><tr><th>Пара</th><th>D</th><th>TP</th><th>+</th></tr></thead>
+          <tbody id="plan"></tbody>
+        </table>
+        <h2 style="margin-top:12px">Сделки</h2>
+        <table>
+          <thead><tr><th>Пара</th><th>Стор.</th><th>PnL</th></tr></thead>
+          <tbody id="journal"></tbody>
+        </table>
+      </aside>
+    </div>
+    <div class="foot">
+      <span>ShotTrader · свой терминал Shot Group</span>
+      <span id="footMode"></span>
+      <span id="footHint">раз в минуту читает рекомендации ShotCore</span>
+    </div>
+  </div>
+  <script>
+    const canvas = document.getElementById("chart");
+    const ctx = canvas.getContext("2d");
+    let state = null;
+
+    async function api(path, opts) {
+      const res = await fetch(path, { cache: "no-store", ...opts, headers: { "Content-Type": "application/json", ...(opts && opts.headers || {}) } });
+      if (!res.ok) throw new Error(res.statusText);
+      return res.json();
+    }
+
+    function fmt(n, d=2) { return Number(n || 0).toFixed(d); }
+    function money(n) {
+      const v = Number(n || 0);
+      return (v >= 0 ? "+" : "") + fmt(v) + "$";
+    }
+
+    function draw() {
+      const wrap = canvas.parentElement;
+      const dpr = window.devicePixelRatio || 1;
+      const w = wrap.clientWidth, h = wrap.clientHeight;
+      canvas.width = Math.floor(w * dpr);
+      canvas.height = Math.floor(h * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.fillStyle = "#0b0e13";
+      ctx.fillRect(0, 0, w, h);
+      const ticks = (state && state.ticks) || [];
+      if (ticks.length < 2) {
+        ctx.fillStyle = "#8b95a8";
+        ctx.fillText("ждём тики…", 16, 24);
+        return;
+      }
+      const prices = ticks.map(t => t.price);
+      let lo = Math.min(...prices), hi = Math.max(...prices);
+      if (state.buy_px) lo = Math.min(lo, state.buy_px);
+      if (state.sell_px) hi = Math.max(hi, state.sell_px);
+      const pad = (hi - lo) * 0.08 || hi * 0.001;
+      lo -= pad; hi += pad;
+      const t0 = ticks[0].ts, t1 = ticks[ticks.length - 1].ts || t0 + 1;
+      const xOf = (ts) => 40 + (w - 80) * (ts - t0) / Math.max(1, t1 - t0);
+      const yOf = (px) => 12 + (h - 28) * (1 - (px - lo) / Math.max(1e-12, hi - lo));
+      if (state.buy_px) {
+        ctx.strokeStyle = "#4fba7a88"; ctx.beginPath();
+        ctx.moveTo(40, yOf(state.buy_px)); ctx.lineTo(w - 20, yOf(state.buy_px)); ctx.stroke();
+        ctx.fillStyle = "#4fba7a"; ctx.fillText("BUY " + fmt(state.buy_px, 6), 44, yOf(state.buy_px) - 4);
+      }
+      if (state.sell_px) {
+        ctx.strokeStyle = "#e15b6488"; ctx.beginPath();
+        ctx.moveTo(40, yOf(state.sell_px)); ctx.lineTo(w - 20, yOf(state.sell_px)); ctx.stroke();
+        ctx.fillStyle = "#e15b64"; ctx.fillText("SELL " + fmt(state.sell_px, 6), 44, yOf(state.sell_px) - 4);
+      }
+      for (const t of ticks) {
+        ctx.fillStyle = t.side === "buy" ? "#4fba7a" : "#e15b64";
+        ctx.beginPath();
+        ctx.arc(xOf(t.ts), yOf(t.price), 2.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = "#8b95a8";
+      ctx.fillText(fmt(hi, 6), 4, 14);
+      ctx.fillText(fmt(lo, 6), 4, h - 8);
+    }
+
+    function render() {
+      if (!state) return;
+      const badge = document.getElementById("modeBadge");
+      badge.textContent = state.emulate ? "эмуляция" : "LIVE";
+      badge.className = "badge " + (state.emulate ? "emu" : "live");
+      const halt = document.getElementById("haltBadge");
+      halt.style.display = state.halted ? "inline-flex" : "none";
+      if (state.halted) halt.textContent = "АВТО-СТОП: " + (state.halt_reason || "");
+      document.getElementById("orderSize").value = state.order_size;
+      document.getElementById("leverage").value = state.leverage;
+      document.getElementById("autostop").value = state.autostop_usd;
+      document.getElementById("unreal").textContent = money(state.unrealized);
+      document.getElementById("unreal").className = "v " + (state.unrealized >= 0 ? "up" : "down");
+      document.getElementById("hour").textContent = `${state.hour.trades} / ${money(state.hour.pnl_usd)}`;
+      document.getElementById("day").textContent = `${state.day.trades} / ${money(state.day.pnl_usd)}`;
+      document.getElementById("pairTitle").textContent = state.view || "—";
+      const a = (state.algos || []).find(x => x.symbol === state.view);
+      document.getElementById("pairMeta").textContent = a
+        ? `D ${a.distance}% · TP ${a.tp}% · x${a.lever} · ${a.state}`
+        : "выберите пару";
+      document.getElementById("planMeta").textContent = `план: ${(state.plan || []).length} пар · клонов: ${(state.algos || []).length}`;
+      document.getElementById("footMode").textContent = state.emulate
+        ? "ордера виртуальные — ключи OKX не нужны"
+        : "LIVE: реальные ордера на OKX";
+      document.getElementById("tabs").innerHTML = (state.algos || []).map(x =>
+        `<button class="tab ${x.symbol === state.view ? "on" : ""}" data-sym="${x.symbol}">${x.symbol.split("-")[0]}</button>`
+      ).join("") || `<span class="muted">нет активных клонов</span>`;
+      document.querySelectorAll(".tab").forEach(btn => btn.onclick = () => {
+        api("/api/view", { method: "POST", body: JSON.stringify({ symbol: btn.dataset.sym }) }).then(tick);
+      });
+      document.getElementById("algos").innerHTML = (state.algos || []).map(x => `
+        <tr><td>${x.symbol.split("-")[0]}</td><td class="amber">${fmt(x.distance)}</td>
+        <td>${fmt(x.tp)}</td><td>${x.state}${x.side ? " " + x.side : ""}</td><td>${x.left_min}</td></tr>`).join("")
+        || `<tr><td colspan="5" class="muted">ожидание рекомендаций</td></tr>`;
+      document.getElementById("plan").innerHTML = (state.plan || []).slice(0, 20).map(p => `
+        <tr><td>${(p.symbol || "").split("-")[0]}</td><td class="amber">${fmt(p.recommend_pct)}</td>
+        <td>${fmt(p.tp_pct)}</td><td>${fmt(p.win_prob || 0, 0)}%</td></tr>`).join("")
+        || `<tr><td colspan="4" class="muted">пустой план</td></tr>`;
+      document.getElementById("journal").innerHTML = [...(state.journal || [])].reverse().slice(0, 25).map(j => `
+        <tr><td>${(j.symbol || "").split("-")[0]}</td><td>${j.side}</td>
+        <td class="${j.pnl_usd >= 0 ? "up" : "down"}">${money(j.pnl_usd)}</td></tr>`).join("")
+        || `<tr><td colspan="3" class="muted">пока пусто</td></tr>`;
+      document.getElementById("log").innerHTML = [...(state.log || [])].reverse().map(l => `<div>${l}</div>`).join("");
+      draw();
+    }
+
+    async function tick() {
+      state = await api("/api/state");
+      render();
+    }
+
+    document.getElementById("saveBtn").onclick = async () => {
+      await api("/api/settings", {
+        method: "POST",
+        body: JSON.stringify({
+          order_size: Number(document.getElementById("orderSize").value),
+          leverage: Number(document.getElementById("leverage").value),
+          autostop_usd: Number(document.getElementById("autostop").value),
+        }),
+      });
+      tick();
+    };
+    document.getElementById("panicBtn").onclick = () => api("/api/panic", { method: "POST", body: "{}" }).then(tick);
+    document.getElementById("resumeBtn").onclick = () => api("/api/resume", { method: "POST", body: "{}" }).then(tick);
+    window.addEventListener("resize", draw);
+    tick().catch(err => { document.getElementById("log").textContent = "ошибка: " + err.message; });
+    setInterval(() => tick().catch(console.error), 1000);
+  </script>
+</body>
+</html>

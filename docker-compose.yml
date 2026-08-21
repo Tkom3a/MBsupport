@@ -20,3 +20,33 @@ services:
       timeout: 5s
       retries: 8
       start_period: 40s
+
+  shottrader:
+    build:
+      context: .
+      dockerfile: shottrader/Dockerfile
+    container_name: shottrader
+    restart: unless-stopped
+    env_file:
+      - shottrader/.env
+    ports:
+      - "${TRADER_PORT:-4862}:4862"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      TZ: ${TZ:-Europe/Moscow}
+      TRADER_HOST: 0.0.0.0
+      TRADER_PORT: "4862"
+      SHOTCORE_URL: ${SHOTCORE_URL:-http://shotcore:4861}
+      EMULATE: ${EMULATE:-true}
+      LIVE_TRADING: ${LIVE_TRADING:-false}
+    depends_on:
+      shotcore:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4862/health')"]
+      interval: 20s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
