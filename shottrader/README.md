@@ -25,7 +25,9 @@ cp .env.example .env
 python -m shottrader
 ```
 
-UI: `http://IP:4862/`
+График убран: вместо него онлайн-таблица цен, BUY/SELL и расстояния до ордеров (обновление ~0.8 с).
+
+UI: `http://IP:4862/` · с дашборда ShotCore вкладка **ShotTrader**.
 
 Через Docker из корня репозитория (сервис `shottrader` в compose):
 

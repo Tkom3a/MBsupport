@@ -80,6 +80,7 @@ class WebConfig:
     token: str = ""
     timezone: str = "Europe/Moscow"
     stats_lookback_min: int = 180
+    shottrader_url: str = ""
 
 
 @dataclass
@@ -291,6 +292,8 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         web.timezone = _env("TZ")
     if _env_filled("STATS_LOOKBACK_MIN"):
         web.stats_lookback_min = _as_int("STATS_LOOKBACK_MIN", web.stats_lookback_min)
+    if _env_filled("SHOTTRADER_URL"):
+        web.shottrader_url = _env("SHOTTRADER_URL")
 
     if _env_filled("TELEGRAM_BOT_TOKEN"):
         notify.telegram_bot_token = _env("TELEGRAM_BOT_TOKEN")
@@ -355,6 +358,7 @@ def public_filters(cfg: AppConfig) -> dict[str, Any]:
         "timezone": cfg.web.timezone,
         "stats_lookback_min": cfg.web.stats_lookback_min,
         "retain_hours": cfg.output.retain_hours,
+        "shottrader_url": cfg.web.shottrader_url,
     }
 
 

@@ -8,7 +8,7 @@
     :root {
       --bg: #0a0c10; --panel: #12161e; --line: #262c38; --text: #d7deea;
       --muted: #8b95a8; --down: #e15b64; --up: #4fba7a; --amber: #d7a13b;
-      --chip: #1d2430; --buy: #2d6b4f; --sell: #7a2f38;
+      --chip: #1d2430;
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.35 "Segoe UI", system-ui, sans-serif; }
@@ -19,6 +19,12 @@
     }
     .brand { font-weight: 700; letter-spacing: 0.04em; }
     .brand span { color: var(--amber); }
+    .nav a {
+      color: var(--muted); text-decoration: none; padding: 5px 10px; border-radius: 5px;
+      border: 1px solid transparent; font-size: 12px;
+    }
+    .nav a.on { color: var(--text); border-color: var(--line); background: #1a2030; }
+    .nav a:hover { color: var(--text); }
     .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
     .badge.live { color: var(--down); border-color: #7a2f38; }
     .badge.emu { color: var(--up); border-color: #2d6b4f; }
@@ -29,7 +35,7 @@
     .right { border-right: 0; border-left: 1px solid var(--line); }
     h2 { margin: 0 0 8px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
     label { display: block; color: var(--muted); font-size: 11px; margin: 8px 0 3px; }
-    input, select, button {
+    input, button {
       background: var(--chip); color: var(--text); border: 1px solid var(--line);
       border-radius: 5px; padding: 6px 8px; font: inherit; width: 100%;
     }
@@ -40,24 +46,19 @@
     .kpi { background: #0e1218; border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin-bottom: 6px; }
     .kpi .v { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
     .kpi .l { color: var(--muted); font-size: 11px; }
-    .center { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-    .chart-head {
+    .center { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #0b0e13; }
+    .board-head {
       display: flex; align-items: center; gap: 10px; padding: 8px 12px;
       border-bottom: 1px solid var(--line); background: #0e1218;
     }
-    .chart-head b { font-size: 15px; }
-    .chart-wrap { flex: 1; min-height: 0; position: relative; background: #0b0e13; }
-    canvas { width: 100%; height: 100%; display: block; }
-    .tabs { display: flex; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-    .tab {
-      padding: 4px 8px; border-radius: 4px; border: 1px solid var(--line); cursor: pointer;
-      color: var(--muted); font-size: 12px; width: auto;
-    }
-    .tab.on { color: var(--text); background: #1c2430; border-color: #3a4a66; }
+    .board-head b { font-size: 14px; }
+    .board-wrap { flex: 1; min-height: 0; overflow: auto; }
     table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    th, td { padding: 5px 6px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
-    th { color: var(--muted); font-weight: 600; text-align: right; }
+    th, td { padding: 7px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: #0e1218; z-index: 1; }
     td:first-child, th:first-child { text-align: left; }
+    tbody tr:hover { background: #151b26; }
+    tbody tr.sel { background: #1c2430; }
     .log {
       height: 180px; overflow: auto; background: #0b0e13; border: 1px solid var(--line);
       border-radius: 6px; padding: 6px; font: 11px/1.4 ui-monospace, Consolas, monospace;
@@ -67,12 +68,21 @@
       border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; background: #0e1218;
     }
     .up { color: var(--up); } .down { color: var(--down); } .amber { color: var(--amber); }
+    .muted { color: var(--muted); }
+    @media (max-width: 1100px) {
+      .main { grid-template-columns: 1fr; }
+      .side, .right { border: 0; border-bottom: 1px solid var(--line); max-height: 280px; }
+    }
   </style>
 </head>
 <body>
   <div class="app">
     <div class="top">
       <div class="brand">Shot<span>Trader</span></div>
+      <nav class="nav">
+        <a id="linkCore" href="#">ShotCore</a>
+        <a class="on" href="/">ShotTrader</a>
+      </nav>
       <span class="badge" id="modeBadge">эмуляция</span>
       <span class="badge" id="haltBadge" style="display:none">АВТО-СТОП</span>
       <div class="grow"></div>
@@ -100,22 +110,35 @@
         <div class="log" id="log"></div>
       </aside>
       <section class="center">
-        <div class="chart-head">
-          <b id="pairTitle">—</b>
-          <span id="pairMeta" class="muted"></span>
+        <div class="board-head">
+          <b>Рынок · ордера онлайн</b>
+          <span class="muted" id="boardMeta">follow 1 с · hold 0.3 с</span>
           <div class="grow"></div>
-          <span>follow 1 с · hold 0.3 с</span>
+          <span class="muted" id="tickAge">обновление…</span>
         </div>
-        <div class="tabs" id="tabs"></div>
-        <div class="chart-wrap"><canvas id="chart"></canvas></div>
+        <div class="board-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Пара</th>
+                <th>Цена</th>
+                <th>BUY</th>
+                <th>до BUY</th>
+                <th>SELL</th>
+                <th>до SELL</th>
+                <th>D%</th>
+                <th>TP%</th>
+                <th>Сост.</th>
+                <th>PnL</th>
+                <th>мин</th>
+              </tr>
+            </thead>
+            <tbody id="markets"><tr><td colspan="11" class="muted">ожидание клонов</td></tr></tbody>
+          </table>
+        </div>
       </section>
       <aside class="right">
-        <h2>Алгоритмы (3 ч)</h2>
-        <table>
-          <thead><tr><th>Пара</th><th>D</th><th>TP</th><th>Сост.</th><th>мин</th></tr></thead>
-          <tbody id="algos"></tbody>
-        </table>
-        <h2 style="margin-top:12px">План ShotCore</h2>
+        <h2>План ShotCore</h2>
         <table>
           <thead><tr><th>Пара</th><th>D</th><th>TP</th><th>+</th></tr></thead>
           <tbody id="plan"></tbody>
@@ -128,71 +151,44 @@
       </aside>
     </div>
     <div class="foot">
-      <span>ShotTrader · свой терминал Shot Group</span>
+      <span>ShotTrader · таблица цен и ордеров</span>
       <span id="footMode"></span>
       <span id="footHint">раз в минуту читает рекомендации ShotCore</span>
     </div>
   </div>
   <script>
-    const canvas = document.getElementById("chart");
-    const ctx = canvas.getContext("2d");
     let state = null;
+    const qs = new URLSearchParams(location.search);
+    const coreUrl = qs.get("core") || `${location.protocol}//${location.hostname}:4861/`;
+    document.getElementById("linkCore").href = coreUrl;
 
     async function api(path, opts) {
-      const res = await fetch(path, { cache: "no-store", ...opts, headers: { "Content-Type": "application/json", ...(opts && opts.headers || {}) } });
+      const res = await fetch(path, {
+        cache: "no-store",
+        ...opts,
+        headers: { "Content-Type": "application/json", ...((opts && opts.headers) || {}) },
+      });
       if (!res.ok) throw new Error(res.statusText);
       return res.json();
     }
 
-    function fmt(n, d=2) { return Number(n || 0).toFixed(d); }
+    function fmt(n, d = 2) { return Number(n || 0).toFixed(d); }
+    function px(n) {
+      const v = Number(n || 0);
+      if (!v) return "—";
+      if (v >= 100) return fmt(v, 2);
+      if (v >= 1) return fmt(v, 4);
+      return fmt(v, 6);
+    }
     function money(n) {
       const v = Number(n || 0);
       return (v >= 0 ? "+" : "") + fmt(v) + "$";
     }
-
-    function draw() {
-      const wrap = canvas.parentElement;
-      const dpr = window.devicePixelRatio || 1;
-      const w = wrap.clientWidth, h = wrap.clientHeight;
-      canvas.width = Math.floor(w * dpr);
-      canvas.height = Math.floor(h * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.fillStyle = "#0b0e13";
-      ctx.fillRect(0, 0, w, h);
-      const ticks = (state && state.ticks) || [];
-      if (ticks.length < 2) {
-        ctx.fillStyle = "#8b95a8";
-        ctx.fillText("ждём тики…", 16, 24);
-        return;
-      }
-      const prices = ticks.map(t => t.price);
-      let lo = Math.min(...prices), hi = Math.max(...prices);
-      if (state.buy_px) lo = Math.min(lo, state.buy_px);
-      if (state.sell_px) hi = Math.max(hi, state.sell_px);
-      const pad = (hi - lo) * 0.08 || hi * 0.001;
-      lo -= pad; hi += pad;
-      const t0 = ticks[0].ts, t1 = ticks[ticks.length - 1].ts || t0 + 1;
-      const xOf = (ts) => 40 + (w - 80) * (ts - t0) / Math.max(1, t1 - t0);
-      const yOf = (px) => 12 + (h - 28) * (1 - (px - lo) / Math.max(1e-12, hi - lo));
-      if (state.buy_px) {
-        ctx.strokeStyle = "#4fba7a88"; ctx.beginPath();
-        ctx.moveTo(40, yOf(state.buy_px)); ctx.lineTo(w - 20, yOf(state.buy_px)); ctx.stroke();
-        ctx.fillStyle = "#4fba7a"; ctx.fillText("BUY " + fmt(state.buy_px, 6), 44, yOf(state.buy_px) - 4);
-      }
-      if (state.sell_px) {
-        ctx.strokeStyle = "#e15b6488"; ctx.beginPath();
-        ctx.moveTo(40, yOf(state.sell_px)); ctx.lineTo(w - 20, yOf(state.sell_px)); ctx.stroke();
-        ctx.fillStyle = "#e15b64"; ctx.fillText("SELL " + fmt(state.sell_px, 6), 44, yOf(state.sell_px) - 4);
-      }
-      for (const t of ticks) {
-        ctx.fillStyle = t.side === "buy" ? "#4fba7a" : "#e15b64";
-        ctx.beginPath();
-        ctx.arc(xOf(t.ts), yOf(t.price), 2.2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.fillStyle = "#8b95a8";
-      ctx.fillText(fmt(hi, 6), 4, 14);
-      ctx.fillText(fmt(lo, 6), 4, h - 8);
+    function distCell(v) {
+      if (v == null || Number.isNaN(Number(v))) return `<td class="muted">—</td>`;
+      const n = Number(v);
+      const cls = n <= 0.05 ? "amber" : "muted";
+      return `<td class="${cls}">${fmt(n, 3)}%</td>`;
     }
 
     function render() {
@@ -210,35 +206,59 @@
       document.getElementById("unreal").className = "v " + (state.unrealized >= 0 ? "up" : "down");
       document.getElementById("hour").textContent = `${state.hour.trades} / ${money(state.hour.pnl_usd)}`;
       document.getElementById("day").textContent = `${state.day.trades} / ${money(state.day.pnl_usd)}`;
-      document.getElementById("pairTitle").textContent = state.view || "—";
-      const a = (state.algos || []).find(x => x.symbol === state.view);
-      document.getElementById("pairMeta").textContent = a
-        ? `D ${a.distance}% · TP ${a.tp}% · x${a.lever} · ${a.state}`
-        : "выберите пару";
-      document.getElementById("planMeta").textContent = `план: ${(state.plan || []).length} пар · клонов: ${(state.algos || []).length}`;
+      document.getElementById("planMeta").textContent =
+        `план: ${(state.plan || []).length} · клонов: ${(state.markets || state.algos || []).length}`;
+      document.getElementById("boardMeta").textContent =
+        `follow ${(state.follow_delay_ms || 1000) / 1000} с · hold ${(state.hold_ms || 300) / 1000} с`;
+      document.getElementById("tickAge").textContent = new Date().toLocaleTimeString();
       document.getElementById("footMode").textContent = state.emulate
         ? "ордера виртуальные — ключи OKX не нужны"
         : "LIVE: реальные ордера на OKX";
-      document.getElementById("tabs").innerHTML = (state.algos || []).map(x =>
-        `<button class="tab ${x.symbol === state.view ? "on" : ""}" data-sym="${x.symbol}">${x.symbol.split("-")[0]}</button>`
-      ).join("") || `<span class="muted">нет активных клонов</span>`;
-      document.querySelectorAll(".tab").forEach(btn => btn.onclick = () => {
-        api("/api/view", { method: "POST", body: JSON.stringify({ symbol: btn.dataset.sym }) }).then(tick);
-      });
-      document.getElementById("algos").innerHTML = (state.algos || []).map(x => `
-        <tr><td>${x.symbol.split("-")[0]}</td><td class="amber">${fmt(x.distance)}</td>
-        <td>${fmt(x.tp)}</td><td>${x.state}${x.side ? " " + x.side : ""}</td><td>${x.left_min}</td></tr>`).join("")
-        || `<tr><td colspan="5" class="muted">ожидание рекомендаций</td></tr>`;
-      document.getElementById("plan").innerHTML = (state.plan || []).slice(0, 20).map(p => `
+
+      const rows = state.markets || state.algos || [];
+      const body = document.getElementById("markets");
+      if (!rows.length) {
+        body.innerHTML = `<tr><td colspan="11" class="muted">ожидание клонов из плана ShotCore</td></tr>`;
+      } else {
+        body.innerHTML = rows.map((x) => {
+          const sel = x.symbol === state.view ? "sel" : "";
+          const st = x.state === "pos"
+            ? `<span class="amber">${x.side || "pos"}</span>`
+            : (x.state || "hunt");
+          const u = x.state === "pos"
+            ? `<span class="${Number(x.unrealized) >= 0 ? "up" : "down"}">${money(x.unrealized)}</span>`
+            : "—";
+          return `<tr class="${sel}" data-sym="${x.symbol}">
+            <td>${x.symbol}</td>
+            <td class="amber">${px(x.last)}</td>
+            <td class="up">${px(x.buy)}</td>
+            ${distCell(x.buy_dist_pct)}
+            <td class="down">${px(x.sell)}</td>
+            ${distCell(x.sell_dist_pct)}
+            <td class="amber">${fmt(x.distance)}</td>
+            <td>${fmt(x.tp)}</td>
+            <td>${st}</td>
+            <td>${u}</td>
+            <td>${x.left_min}</td>
+          </tr>`;
+        }).join("");
+        body.querySelectorAll("tr[data-sym]").forEach((tr) => {
+          tr.onclick = () => api("/api/view", {
+            method: "POST",
+            body: JSON.stringify({ symbol: tr.dataset.sym }),
+          }).then(tick);
+        });
+      }
+
+      document.getElementById("plan").innerHTML = (state.plan || []).slice(0, 20).map((p) => `
         <tr><td>${(p.symbol || "").split("-")[0]}</td><td class="amber">${fmt(p.recommend_pct)}</td>
         <td>${fmt(p.tp_pct)}</td><td>${fmt(p.win_prob || 0, 0)}%</td></tr>`).join("")
         || `<tr><td colspan="4" class="muted">пустой план</td></tr>`;
-      document.getElementById("journal").innerHTML = [...(state.journal || [])].reverse().slice(0, 25).map(j => `
+      document.getElementById("journal").innerHTML = [...(state.journal || [])].reverse().slice(0, 25).map((j) => `
         <tr><td>${(j.symbol || "").split("-")[0]}</td><td>${j.side}</td>
         <td class="${j.pnl_usd >= 0 ? "up" : "down"}">${money(j.pnl_usd)}</td></tr>`).join("")
         || `<tr><td colspan="3" class="muted">пока пусто</td></tr>`;
-      document.getElementById("log").innerHTML = [...(state.log || [])].reverse().map(l => `<div>${l}</div>`).join("");
-      draw();
+      document.getElementById("log").innerHTML = [...(state.log || [])].reverse().map((l) => `<div>${l}</div>`).join("");
     }
 
     async function tick() {
@@ -259,9 +279,8 @@
     };
     document.getElementById("panicBtn").onclick = () => api("/api/panic", { method: "POST", body: "{}" }).then(tick);
     document.getElementById("resumeBtn").onclick = () => api("/api/resume", { method: "POST", body: "{}" }).then(tick);
-    window.addEventListener("resize", draw);
-    tick().catch(err => { document.getElementById("log").textContent = "ошибка: " + err.message; });
-    setInterval(() => tick().catch(console.error), 1000);
+    tick().catch((err) => { document.getElementById("log").textContent = "ошибка: " + err.message; });
+    setInterval(() => tick().catch(console.error), 800);
   </script>
 </body>
 </html>

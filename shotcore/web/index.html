@@ -27,6 +27,15 @@
       display: flex; justify-content: space-between; align-items: flex-end; gap: 16px;
       padding: 20px 24px 12px; border-bottom: 1px solid var(--line);
     }
+    .nav {
+      display: flex; gap: 6px; padding: 10px 24px 0;
+    }
+    .nav a {
+      color: var(--muted); text-decoration: none; padding: 7px 12px; border-radius: 6px;
+      border: 1px solid transparent; font-size: 13px;
+    }
+    .nav a.on { color: var(--text); border-color: var(--line); background: var(--chip); }
+    .nav a:hover { color: var(--text); }
     h1 { margin: 0; font-size: 20px; letter-spacing: 0.04em; font-weight: 650; }
     h1 span { color: var(--amber); }
     h2 { margin: 0; font-size: 13px; color: var(--muted); font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
@@ -103,6 +112,10 @@
     </div>
     <div class="live"><span class="dot"></span><span id="live">ожидание данных</span></div>
   </header>
+  <nav class="nav">
+    <a class="on" href="/">ShotCore</a>
+    <a id="linkTrader" href="#">ShotTrader</a>
+  </nav>
   <div class="kpis">
     <div class="kpi"><div class="lbl">Пары с прострелами</div><div class="val" id="kpiPairs">—</div></div>
     <div class="kpi"><div class="lbl">Прострелов</div><div class="val" id="kpiShots">—</div></div>
@@ -218,6 +231,13 @@
     const searchEl = document.getElementById("search");
     const feedSearchEl = document.getElementById("feedSearch");
     const leverFilterEl = document.getElementById("leverFilter");
+    const traderLink = document.getElementById("linkTrader");
+    if (traderLink) {
+      const url = new URL(`${location.protocol}//${location.hostname}:4862/`);
+      if (token) url.searchParams.set("token", token);
+      url.searchParams.set("core", location.origin + "/");
+      traderLink.href = url.toString();
+    }
     const savedLookback = localStorage.getItem("shotcore_lookback");
     if (savedLookback != null) lookbackEl.value = savedLookback;
     const savedLever = localStorage.getItem("shotcore_lever");
@@ -296,6 +316,15 @@
       const f = stats.filters || {};
       const board = stats.active_markets || [];
       const activeN = board.filter(m => m.subscribed).length;
+      const traderLink = document.getElementById("linkTrader");
+      if (traderLink) {
+        const raw = (f.shottrader_url || "").trim();
+        const base = raw || `${location.protocol}//${location.hostname}:4862/`;
+        const url = new URL(base, location.origin);
+        if (token) url.searchParams.set("token", token);
+        url.searchParams.set("core", location.origin + "/");
+        traderLink.href = url.toString();
+      }
       document.getElementById("live").textContent =
         `${stats.symbols_watched || 0} в подписке · тик ${((f.shot_windows_ms || [500,700])[0] || 500)} мс`;
       document.getElementById("subtitle").textContent =

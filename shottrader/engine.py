@@ -362,9 +362,33 @@ class ShotEngine:
         hour = self.window_stats(1)
         day = self.window_stats(24)
         view = self.view_symbol or (next(iter(self.algos), "") or "")
-        tape = self.tapes.get(view)
-        algo = self.algos.get(view)
-        ticks = list(tape.ticks)[-240:] if tape else []
+        markets: list[dict[str, Any]] = []
+        for a in self.algos.values():
+            last = float(self.tapes[a.symbol].last or 0)
+            buy_dist = ((last - a.buy_px) / last * 100.0) if last > 0 and a.buy_px > 0 else None
+            sell_dist = ((a.sell_px - last) / last * 100.0) if last > 0 and a.sell_px > 0 else None
+            u_pnl = 0.0
+            if a.state == "pos" and a.entry > 0 and last > 0:
+                u_pnl = _pnl_usd(a.pos_side, a.entry, last, a.size_usdt)
+            markets.append(
+                {
+                    "symbol": a.symbol,
+                    "last": last,
+                    "distance": a.distance,
+                    "tp": a.tp,
+                    "lever": a.lever,
+                    "state": a.state,
+                    "side": a.pos_side,
+                    "entry": a.entry,
+                    "buy": a.buy_px,
+                    "sell": a.sell_px,
+                    "buy_dist_pct": None if buy_dist is None else round(buy_dist, 4),
+                    "sell_dist_pct": None if sell_dist is None else round(sell_dist, 4),
+                    "unrealized": round(u_pnl, 4),
+                    "left_min": max(0, int((a.until_ts - _now_ms()) / 60000)),
+                }
+            )
+        markets.sort(key=lambda row: row["symbol"])
         return {
             "emulate": self.emulate,
             "live": (not self.emulate) and bool(self.broker and self.broker.ready),
@@ -380,26 +404,9 @@ class ShotEngine:
             "hour": hour,
             "day": day,
             "view": view,
-            "ticks": ticks,
-            "last": tape.last if tape else 0,
-            "buy_px": algo.buy_px if algo else 0,
-            "sell_px": algo.sell_px if algo else 0,
+            "markets": markets,
             "plan": self.plan_pairs,
-            "algos": [
-                {
-                    "symbol": a.symbol,
-                    "distance": a.distance,
-                    "tp": a.tp,
-                    "lever": a.lever,
-                    "state": a.state,
-                    "side": a.pos_side,
-                    "entry": a.entry,
-                    "buy": a.buy_px,
-                    "sell": a.sell_px,
-                    "left_min": max(0, int((a.until_ts - _now_ms()) / 60000)),
-                }
-                for a in self.algos.values()
-            ],
+            "algos": markets,
             "journal": list(self.journal)[-40:],
             "log": list(self.log_lines)[-60:],
         }
