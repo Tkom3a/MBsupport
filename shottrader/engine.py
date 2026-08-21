@@ -56,6 +56,13 @@ def _pnl_usd(side: str, entry: float, exit_px: float, size_usdt: float) -> float
     return round(size_usdt * chg, 4)
 
 
+def _pnl_pct(side: str, entry: float, exit_px: float) -> float:
+    if entry <= 0 or exit_px <= 0:
+        return 0.0
+    chg = (exit_px - entry) / entry if side == "buy" else (entry - exit_px) / entry
+    return round(chg * 100.0, 4)
+
+
 @dataclass
 class Tape:
     pts: deque[tuple[int, float]] = field(default_factory=lambda: deque(maxlen=4000))
@@ -521,6 +528,7 @@ class ShotEngine:
 
     def _close(self, algo: Algo, exit_px: float, why: str) -> None:
         pnl = _pnl_usd(algo.pos_side, algo.entry, exit_px, algo.size_usdt)
+        pct = _pnl_pct(algo.pos_side, algo.entry, exit_px)
         row = {
             "ts": _now_ms(),
             "symbol": algo.symbol,
@@ -528,6 +536,7 @@ class ShotEngine:
             "entry": algo.entry,
             "exit": exit_px,
             "pnl_usd": pnl,
+            "pnl_pct": pct,
             "why": why,
             "distance": algo.buy_distance if algo.pos_side == "buy" else algo.sell_distance,
             "tp": algo.buy_tp if algo.pos_side == "buy" else algo.sell_tp,
@@ -612,6 +621,12 @@ class ShotEngine:
                 algo = self.algos.get(str(item.get("symbol") or "").upper())
                 if algo and algo.lever:
                     item["lever"] = int(algo.lever)
+            if item.get("pnl_pct") in (None, ""):
+                item["pnl_pct"] = _pnl_pct(
+                    str(item.get("side") or ""),
+                    float(item.get("entry") or 0),
+                    float(item.get("exit") or 0),
+                )
             rows.append(item)
         return rows
 

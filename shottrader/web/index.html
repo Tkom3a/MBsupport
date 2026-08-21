@@ -222,6 +222,7 @@
                   <th>D</th>
                   <th>Плечо</th>
                   <th>Ордер</th>
+                  <th>ход %</th>
                   <th>PnL</th>
                 </tr>
               </thead>
@@ -500,13 +501,26 @@
         `${shown} сделок · ${plus}/${rows.length - plus} · ${money(pnl)}`;
       const body = document.getElementById("dealsBody");
       if (!rows.length) {
-        body.innerHTML = `<tr><td colspan="7" class="muted">${q ? "нет сделок по фильтру" : "нет сделок за сутки"}</td></tr>`;
+        body.innerHTML = `<tr><td colspan="8" class="muted">${q ? "нет сделок по фильтру" : "нет сделок за сутки"}</td></tr>`;
       } else {
         body.innerHTML = [...rows].reverse().map((j) => {
           const side = String(j.side || "").toLowerCase();
           const sideCls = side === "buy" ? "up" : (side === "sell" ? "down" : "");
           const lever = Number(j.lever || 0);
           const size = Number(j.size_usdt || 0);
+          let pct = Number(j.pnl_pct);
+          if (!Number.isFinite(pct)) {
+            const entry = Number(j.entry || 0);
+            const exitPx = Number(j.exit || 0);
+            if (entry > 0 && exitPx > 0) {
+              pct = side === "sell" ? (entry - exitPx) / entry * 100 : (exitPx - entry) / entry * 100;
+            } else {
+              pct = NaN;
+            }
+          }
+          const pctCell = Number.isFinite(pct)
+            ? `<td class="${pct >= 0 ? "up" : "down"}">${pct >= 0 ? "+" : ""}${fmt(pct, 3)}%</td>`
+            : `<td class="muted">—</td>`;
           return `<tr>
             <td class="muted">${tradeTime(j.ts)}</td>
             <td>${(j.symbol || "").split("-")[0]}</td>
@@ -514,6 +528,7 @@
             <td class="amber">${Number(j.distance) > 0 ? fmt(j.distance) + "%" : "—"}</td>
             <td class="amber">${lever > 0 ? "x" + lever : "—"}</td>
             <td>${size > 0 ? fmt(size) + "$" : "—"}</td>
+            ${pctCell}
             <td class="${Number(j.pnl_usd) >= 0 ? "up" : "down"}">${money(j.pnl_usd)}</td>
           </tr>`;
         }).join("");
