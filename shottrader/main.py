@@ -82,6 +82,7 @@ class ShotTrader:
         app.router.add_get("/api/state", self._state)
         app.router.add_post("/api/settings", self._settings)
         app.router.add_post("/api/shotcore", self._set_shotcore)
+        app.router.add_get("/api/reports", self._reports)
         app.router.add_post("/api/view", self._view)
         app.router.add_post("/api/resume", self._resume)
         app.router.add_post("/api/panic", self._panic)
@@ -182,6 +183,10 @@ class ShotTrader:
         self.engine.emergency("panic из UI")
         return web.json_response({"ok": True})
 
+    async def _reports(self, _request: web.Request) -> web.Response:
+        self.engine.roll_calendar_day()
+        return web.json_response(self.engine.reports())
+
     async def _plan_loop(self) -> None:
         fail_sleep = 8
         while True:
@@ -246,16 +251,15 @@ class ShotTrader:
 
     async def _report_loop(self) -> None:
         while True:
-            await asyncio.sleep(30)
+            await asyncio.sleep(20)
+            closed = self.engine.roll_calendar_day()
+            if closed is not None:
+                await self._send_report(f"Сутки закрыты {closed.get('date')}", closed)
             now = asyncio.get_event_loop().time()
             hour = self.engine.window_stats(1)
-            day = self.engine.window_stats(24)
             if now - self._last_hour_report >= 3600:
                 self._last_hour_report = now
                 await self._send_report("Часовой отчёт", hour)
-            if now - self._last_day_report >= 86400:
-                self._last_day_report = now
-                await self._send_report("Суточный отчёт", day)
 
     async def _send_report(self, title: str, stats: dict[str, Any]) -> None:
         text = (

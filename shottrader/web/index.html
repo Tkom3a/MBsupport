@@ -44,7 +44,7 @@
     .right { border-right: 0; border-left: 1px solid var(--line); }
     h2 { margin: 0 0 8px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
     label { display: block; color: var(--muted); font-size: 11px; margin: 8px 0 3px; }
-    input, button {
+    input, button, select {
       background: var(--chip); color: var(--text); border: 1px solid var(--line);
       border-radius: 5px; padding: 6px 8px; font: inherit; width: 100%;
     }
@@ -133,7 +133,7 @@
         <div class="kpi"><div class="l">Нереализ.</div><div class="v" id="unreal">0.00$</div></div>
         <div class="kpi"><div class="l">В сделках</div><div class="v" id="inTrade">0$</div></div>
         <div class="kpi"><div class="l">1 час · сделки / PnL</div><div class="v" id="hour">0 / 0$</div></div>
-        <div class="kpi"><div class="l">24 часа · сделки / PnL</div><div class="v" id="day">0 / 0$</div></div>
+        <div class="kpi"><div class="l">Сегодня · сделки / PnL</div><div class="v" id="day">0 / 0$</div></div>
         <button type="button" class="log-toggle" id="logToggle" aria-expanded="false">
           <span>Логи</span><span class="arrow">▸</span>
         </button>
@@ -159,12 +159,13 @@
                 <th>до SELL</th>
                 <th>D SHORT</th>
                 <th>Сумма</th>
+                <th>+ / −</th>
                 <th>Сост.</th>
                 <th>PnL</th>
                 <th>мин</th>
               </tr>
             </thead>
-            <tbody id="markets"><tr><td colspan="12" class="muted">ожидание клонов</td></tr></tbody>
+            <tbody id="markets"><tr><td colspan="13" class="muted">ожидание клонов</td></tr></tbody>
           </table>
         </div>
       </section>
@@ -173,6 +174,16 @@
         <table>
           <thead><tr><th>Пара</th><th>BUY</th><th>SHORT</th><th>+</th></tr></thead>
           <tbody id="plan"></tbody>
+        </table>
+        <h2 style="margin-top:12px">Отчёт 7 дней</h2>
+        <select id="reportDay"></select>
+        <div class="kpi" style="margin-top:8px">
+          <div class="l" id="reportLabel">сегодня</div>
+          <div class="v" id="reportKpi">0 / 0$</div>
+        </div>
+        <table>
+          <thead><tr><th>Пара</th><th>+ / −</th><th>PnL</th></tr></thead>
+          <tbody id="reportSym"><tr><td colspan="3" class="muted">нет сделок</td></tr></tbody>
         </table>
         <h2 style="margin-top:12px">Сделки</h2>
         <table>
@@ -324,8 +335,9 @@
       document.getElementById("unreal").textContent = money(state.unrealized);
       document.getElementById("unreal").className = "v " + (state.unrealized >= 0 ? "up" : "down");
       document.getElementById("inTrade").textContent = fmt(state.in_trade || 0) + "$";
-      document.getElementById("hour").textContent = `${state.hour.trades} / ${money(state.hour.pnl_usd)}`;
-      document.getElementById("day").textContent = `${state.day.trades} / ${money(state.day.pnl_usd)}`;
+      document.getElementById("hour").textContent = `${state.hour.trades} (+${state.hour.plus || 0}/−${state.hour.minus || 0}) / ${money(state.hour.pnl_usd)}`;
+      const td = state.today || state.day || {};
+      document.getElementById("day").textContent = `${td.trades || 0} (+${td.plus || 0}/−${td.minus || 0}) / ${money(td.pnl_usd)}`;
       document.getElementById("planMeta").textContent = state.plan_error
         ? `ошибка плана: ${state.plan_error}`
         : `план: ${(state.plan || []).length} · клонов: ${(state.markets || state.algos || []).length} · ${state.shotcore_url || ""}`;
@@ -340,8 +352,8 @@
       const body = document.getElementById("markets");
       if (!rows.length) {
         body.innerHTML = state.plan_error
-          ? `<tr><td colspan="12" class="muted">нет клонов — ShotCore недоступен: ${state.plan_error}</td></tr>`
-          : `<tr><td colspan="12" class="muted">ожидание клонов из плана ShotCore</td></tr>`;
+          ? `<tr><td colspan="13" class="muted">нет клонов — ShotCore недоступен: ${state.plan_error}</td></tr>`
+          : `<tr><td colspan="13" class="muted">ожидание клонов из плана ShotCore</td></tr>`;
       } else {
         body.innerHTML = rows.map((x) => {
           const sel = x.symbol === state.view ? "sel" : "";
@@ -356,6 +368,7 @@
             : `<span class="muted">${fmt(x.size_usdt)} $</span>`;
           const dBuy = Number(x.buy_distance) > 0 ? fmt(x.buy_distance) : "—";
           const dSell = Number(x.sell_distance) > 0 ? fmt(x.sell_distance) : "—";
+          const wl = `<span class="up">${x.wins || 0}</span>/<span class="down">${x.losses || 0}</span>`;
           return `<tr class="${sel}" data-sym="${x.symbol}">
             <td>${x.symbol}</td>
             <td class="amber">${px(x.last)}</td>
@@ -366,6 +379,7 @@
             ${distCell(x.sell_dist_pct)}
             <td class="down">${dSell}</td>
             <td>${sum}</td>
+            <td>${wl}</td>
             <td>${st}</td>
             <td>${u}</td>
             <td>${x.left_min}</td>
@@ -390,6 +404,46 @@
         <td class="${j.pnl_usd >= 0 ? "up" : "down"}">${money(j.pnl_usd)}</td></tr>`).join("")
         || `<tr><td colspan="3" class="muted">пока пусто</td></tr>`;
       document.getElementById("log").innerHTML = [...(state.log || [])].reverse().map((l) => `<div>${l}</div>`).join("");
+      renderReports(state.reports);
+    }
+
+    function renderReports(rep) {
+      const sel = document.getElementById("reportDay");
+      if (!sel || !rep || !rep.days) return;
+      const days = rep.days;
+      const keys = days.map((d) => d.date).join("|");
+      if (sel.dataset.keys !== keys) {
+        const keep = sel.value;
+        sel.innerHTML = days.map((d) => {
+          const label = d.label === "сегодня" ? `сегодня · ${d.date}` : d.date;
+          return `<option value="${d.date}">${label}</option>`;
+        }).join("");
+        sel.dataset.keys = keys;
+        if (keep && [...sel.options].some((o) => o.value === keep)) sel.value = keep;
+      }
+      const picked = days.find((d) => d.date === sel.value) || days[0];
+      if (!picked) return;
+      const pnl = Number(picked.pnl_usd || 0);
+      document.getElementById("reportLabel").textContent = (picked.label === "сегодня" ? "сегодня" : picked.date) + " · сделки / PnL";
+      document.getElementById("reportKpi").textContent =
+        `${picked.trades} (+${picked.plus}/−${picked.minus}) / ${money(pnl)}`;
+      document.getElementById("reportKpi").className = "v " + (pnl >= 0 ? "up" : "down");
+      const by = picked.by_symbol || {};
+      const names = Object.keys(by).sort();
+      const box = document.getElementById("reportSym");
+      if (!names.length) {
+        box.innerHTML = `<tr><td colspan="3" class="muted">нет сделок за день</td></tr>`;
+      } else {
+        box.innerHTML = names.map((sym) => {
+          const s = by[sym] || {};
+          const p = Number(s.pnl_usd || 0);
+          return `<tr>
+            <td>${sym.split("-")[0]}</td>
+            <td><span class="up">${s.plus || 0}</span>/<span class="down">${s.minus || 0}</span></td>
+            <td class="${p >= 0 ? "up" : "down"}">${money(p)}</td>
+          </tr>`;
+        }).join("");
+      }
     }
 
     async function tick() {
@@ -412,6 +466,7 @@
       });
     });
     document.getElementById("saveBtn").onclick = () => saveSettings();
+    document.getElementById("reportDay").onchange = () => { if (state) renderReports(state.reports); };
     document.getElementById("panicBtn").onclick = () => api("/api/panic", { method: "POST", body: "{}" }).then(tick);
     document.getElementById("resumeBtn").onclick = () => api("/api/resume", { method: "POST", body: "{}" }).then(tick);
     document.getElementById("logToggle").onclick = () => {

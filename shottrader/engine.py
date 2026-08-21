@@ -6,14 +6,43 @@ import logging
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .config import TraderConfig
 from .okx_broker import OkxBroker
 
 log = logging.getLogger("shottrader.engine")
+MIN_TP_PCT = 0.3
+KEEP_DAYS = 8  # сегодня + 7 предыдущих
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _zone(name: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(name or "Europe/Moscow")
+    except Exception:
+        return ZoneInfo("UTC")
+
+
+def _local_date(ts_ms: int, tz: ZoneInfo) -> str:
+    return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).astimezone(tz).strftime("%Y-%m-%d")
+
+
+def _empty_day(date: str) -> dict[str, Any]:
+    return {
+        "date": date,
+        "trades": 0,
+        "plus": 0,
+        "minus": 0,
+        "pnl_usd": 0.0,
+        "by_symbol": {},
+    }
 
 
 def _now_ms() -> int:
@@ -53,9 +82,6 @@ class Tape:
             else:
                 break
         return px or self.last
-
-
-MIN_TP_PCT = 0.3
 
 
 def _sides_from_pair(pair: dict[str, Any]) -> tuple[float, float, float, float]:
@@ -110,10 +136,15 @@ class ShotEngine:
         self.data_dir = data_dir
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.journal_path = data_dir / "trader_journal.jsonl"
+        self.days_path = data_dir / "daily_reports.json"
+        self.tz = _zone(cfg.timezone)
         self.tapes: dict[str, Tape] = defaultdict(Tape)
         self.algos: dict[str, Algo] = {}
         self.log_lines: deque[str] = deque(maxlen=200)
         self.journal: deque[dict[str, Any]] = deque(maxlen=400)
+        self._journal_all: list[dict[str, Any]] = []
+        self.days: dict[str, dict[str, Any]] = {}
+        self.today_key = _local_date(_now_ms(), self.tz)
         self.emulate = cfg.emulate or not (broker and broker.ready and cfg.live_trading)
         self.order_size = cfg.order_size_usdt
         self.leverage = cfg.leverage
@@ -125,6 +156,7 @@ class ShotEngine:
         self.plan_error = ""
         self.plan_updated_ts = 0
         self._load_journal()
+        self._rebuild_days()
 
     def note(self, text: str) -> None:
         stamp = datetime.now().strftime("%H:%M:%S")
@@ -136,14 +168,147 @@ class ShotEngine:
         if not self.journal_path.is_file():
             return
         try:
-            for line in self.journal_path.read_text(encoding="utf-8").splitlines()[-400:]:
+            lines = self.journal_path.read_text(encoding="utf-8").splitlines()
+            for line in lines[-400:]:
                 if line.strip():
                     self.journal.append(json.loads(line))
+            self._journal_all = []
+            cutoff = _now_ms() - KEEP_DAYS * 86400 * 1000
+            for line in lines:
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+                if int(row.get("ts") or 0) >= cutoff:
+                    self._journal_all.append(row)
         except Exception:
-            pass
+            self._journal_all = list(self.journal)
+
+    def _rebuild_days(self) -> None:
+        saved: dict[str, Any] = {}
+        if self.days_path.is_file():
+            try:
+                raw = json.loads(self.days_path.read_text(encoding="utf-8"))
+                saved = {str(d.get("date")): d for d in (raw.get("days") or []) if d.get("date")}
+            except Exception:
+                saved = {}
+        days: dict[str, dict[str, Any]] = {}
+        for row in getattr(self, "_journal_all", list(self.journal)):
+            self._apply_trade_to_day(days, row)
+        for key, day in saved.items():
+            if key not in days:
+                days[key] = day
+        self.days = days
+        self.today_key = _local_date(_now_ms(), self.tz)
+        if self.today_key not in self.days:
+            self.days[self.today_key] = _empty_day(self.today_key)
+        self._prune_days()
+        self._save_days()
+
+    def _apply_trade_to_day(self, days: dict[str, dict[str, Any]], row: dict[str, Any]) -> None:
+        ts = int(row.get("ts") or 0)
+        if ts <= 0:
+            return
+        key = _local_date(ts, self.tz)
+        day = days.setdefault(key, _empty_day(key))
+        pnl = float(row.get("pnl_usd") or 0)
+        day["trades"] = int(day.get("trades") or 0) + 1
+        day["pnl_usd"] = round(float(day.get("pnl_usd") or 0) + pnl, 4)
+        if pnl > 0:
+            day["plus"] = int(day.get("plus") or 0) + 1
+        else:
+            day["minus"] = int(day.get("minus") or 0) + 1
+        symbol = str(row.get("symbol") or "").upper()
+        if not symbol:
+            return
+        by_map = day.setdefault("by_symbol", {})
+        slot = by_map.setdefault(symbol, {"trades": 0, "plus": 0, "minus": 0, "pnl_usd": 0.0})
+        slot["trades"] += 1
+        slot["pnl_usd"] = round(float(slot.get("pnl_usd") or 0) + pnl, 4)
+        if pnl > 0:
+            slot["plus"] += 1
+        else:
+            slot["minus"] += 1
+
+    def _prune_days(self) -> None:
+        today = datetime.now(self.tz).date()
+        keep = {(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(KEEP_DAYS)}
+        self.days = {k: v for k, v in self.days.items() if k in keep}
+
+    def _save_days(self) -> None:
+        payload = {
+            "updated": datetime.now(self.tz).strftime("%Y-%m-%dT%H:%M:%S"),
+            "timezone": str(self.tz),
+            "days": [self.days[k] for k in sorted(self.days)],
+        }
+        tmp = self.days_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(self.days_path)
+
+    def roll_calendar_day(self) -> dict[str, Any] | None:
+        """Если наступили новые сутки — зафиксировать вчерашний отчёт. Возвращает закрытый день."""
+        now_key = _local_date(_now_ms(), self.tz)
+        if now_key == self.today_key:
+            return None
+        closed = self.days.get(self.today_key) or _empty_day(self.today_key)
+        self.today_key = now_key
+        if now_key not in self.days:
+            self.days[now_key] = _empty_day(now_key)
+        self._prune_days()
+        self._save_days()
+        self.note(
+            f"сутки {closed.get('date')}: сделок {closed.get('trades')} "
+            f"(+{closed.get('plus')}/−{closed.get('minus')}) PnL {float(closed.get('pnl_usd') or 0):+.2f}$"
+        )
+        return closed
+
+    def today_stats(self) -> dict[str, Any]:
+        day = self.days.get(self.today_key) or _empty_day(self.today_key)
+        return {
+            "date": day["date"],
+            "trades": int(day.get("trades") or 0),
+            "plus": int(day.get("plus") or 0),
+            "minus": int(day.get("minus") or 0),
+            "pnl_usd": round(float(day.get("pnl_usd") or 0), 4),
+        }
+
+    def symbol_today(self, symbol: str) -> dict[str, int]:
+        day = self.days.get(self.today_key) or {}
+        slot = (day.get("by_symbol") or {}).get(symbol.upper()) or {}
+        return {
+            "plus": int(slot.get("plus") or 0),
+            "minus": int(slot.get("minus") or 0),
+            "trades": int(slot.get("trades") or 0),
+            "pnl_usd": round(float(slot.get("pnl_usd") or 0), 4),
+        }
+
+    def reports(self) -> dict[str, Any]:
+        today = datetime.now(self.tz).date()
+        rows = []
+        for i in range(KEEP_DAYS):
+            key = (today - timedelta(days=i)).strftime("%Y-%m-%d")
+            day = self.days.get(key) or _empty_day(key)
+            rows.append(
+                {
+                    "date": key,
+                    "label": "сегодня" if i == 0 else key,
+                    "trades": int(day.get("trades") or 0),
+                    "plus": int(day.get("plus") or 0),
+                    "minus": int(day.get("minus") or 0),
+                    "pnl_usd": round(float(day.get("pnl_usd") or 0), 4),
+                    "by_symbol": day.get("by_symbol") or {},
+                }
+            )
+        return {"timezone": str(self.tz), "today": self.today_key, "days": rows}
 
     def _write_trade(self, row: dict[str, Any]) -> None:
+        self.roll_calendar_day()
         self.journal.append(row)
+        self._journal_all.append(row)
+        self._apply_trade_to_day(self.days, row)
+        self._save_days()
         with self.journal_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
@@ -446,8 +611,10 @@ class ShotEngine:
         return round(total, 4)
 
     def snapshot(self) -> dict[str, Any]:
+        self.roll_calendar_day()
         hour = self.window_stats(1)
-        day = self.window_stats(24)
+        today = self.today_stats()
+        day = today
         view = self.view_symbol or (next(iter(self.algos), "") or "")
         markets: list[dict[str, Any]] = []
         for a in self.algos.values():
@@ -460,6 +627,7 @@ class ShotEngine:
                 in_trade = a.size_usdt
                 if last > 0:
                     u_pnl = _pnl_usd(a.pos_side, a.entry, last, a.size_usdt)
+            sc = self.symbol_today(a.symbol)
             markets.append(
                 {
                     "symbol": a.symbol,
@@ -473,6 +641,9 @@ class ShotEngine:
                     "lever": a.lever,
                     "size_usdt": a.size_usdt,
                     "in_trade": round(in_trade, 4),
+                    "wins": sc["plus"],
+                    "losses": sc["minus"],
+                    "day_pnl": sc["pnl_usd"],
                     "state": a.state,
                     "side": a.pos_side,
                     "entry": a.entry,
@@ -501,6 +672,8 @@ class ShotEngine:
             "in_trade": in_trade_total,
             "hour": hour,
             "day": day,
+            "today": today,
+            "reports": self.reports(),
             "view": view,
             "markets": markets,
             "plan": self.plan_pairs,
