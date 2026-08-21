@@ -31,18 +31,30 @@ class AuthConfig:
         return self.mode in {"local", "ldap"} and bool(self.session_secret)
 
     def resolve_api_token(self, explicit: str = "") -> str:
-        """Token for machine clients (ShotTrader, mt_launcher): X-Shot-Token / ?token=."""
+        """Service token accepted as X-Shot-Token / ?token= (ShotCore UI + machine clients)."""
         for candidate in (
             (explicit or "").strip(),
             (os.getenv("WEB_TOKEN") or "").strip(),
             (os.getenv("AUTH_API_TOKEN") or "").strip(),
-            (os.getenv("SHOTCORE_TOKEN") or "").strip(),
         ):
             if candidate:
                 return candidate
-        # When login auth is on and no WEB_TOKEN — allow SESSION_SECRET as service token
         if self.enabled and self.session_secret and self.session_secret != "mbauth-dev-change-me":
             return self.session_secret
+        return ""
+
+    def resolve_ui_token(self, explicit: str = "") -> str:
+        """Token that locks the browser UI. ShotTrader: only TRADER_TOKEN / UI_TOKEN — not SHOTCORE_TOKEN."""
+        for candidate in (
+            (explicit or "").strip(),
+            (os.getenv("TRADER_TOKEN") or "").strip(),
+            (os.getenv("UI_TOKEN") or "").strip(),
+        ):
+            if candidate:
+                return candidate
+        # ShotCore keeps using WEB_TOKEN for its own page when AUTH_MODE=off
+        if self.brand == "ShotCore":
+            return self.resolve_api_token(explicit)
         return ""
 
 

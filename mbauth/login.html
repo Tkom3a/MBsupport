@@ -42,38 +42,61 @@
     button:disabled { opacity: 0.55; cursor: wait; }
     .err { color: var(--down); font-size: 13px; min-height: 1.2em; margin-top: 12px; }
     .mode { font-size: 11px; color: var(--muted); margin-top: 14px; text-align: center; }
+    .user-row.hidden, .pass-row.hidden { display: none; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <form class="card" id="form" autocomplete="on">
       <h1 class="brand"><span>{{BRAND}}</span></h1>
-      <div class="sub">Введите учётные данные для доступа</div>
-      <label for="username">Логин</label>
-      <input id="username" name="username" autocomplete="username" required autofocus />
-      <label for="password">Пароль</label>
-      <input id="password" name="password" type="password" autocomplete="current-password" required />
+      <div class="sub" id="sub">Введите учётные данные для доступа</div>
+      <div class="user-row" id="userRow">
+        <label for="username">Логин</label>
+        <input id="username" name="username" autocomplete="username" />
+      </div>
+      <div class="pass-row" id="passRow">
+        <label for="password" id="passLabel">Пароль</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" />
+      </div>
       <button type="submit" id="btn">Войти</button>
       <div class="err" id="err"></div>
       <div class="mode">режим: {{MODE}}</div>
     </form>
   </div>
   <script>
+    const mode = "{{MODE}}";
     const form = document.getElementById("form");
     const err = document.getElementById("err");
     const btn = document.getElementById("btn");
+    const userRow = document.getElementById("userRow");
+    const passLabel = document.getElementById("passLabel");
+    const sub = document.getElementById("sub");
+    if (mode === "token") {
+      userRow.classList.add("hidden");
+      passLabel.textContent = "Токен доступа";
+      sub.textContent = "Введите WEB_TOKEN / TRADER_TOKEN";
+      document.getElementById("password").required = true;
+      document.getElementById("password").autofocus = true;
+    } else {
+      document.getElementById("username").required = true;
+      document.getElementById("password").required = true;
+      document.getElementById("username").autofocus = true;
+    }
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       err.textContent = "";
       btn.disabled = true;
       try {
+        const payload = mode === "token"
+          ? { token: document.getElementById("password").value }
+          : {
+              username: document.getElementById("username").value,
+              password: document.getElementById("password").value,
+            };
         const res = await fetch("/api/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            username: document.getElementById("username").value,
-            password: document.getElementById("password").value,
-          }),
+          body: JSON.stringify(payload),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) {

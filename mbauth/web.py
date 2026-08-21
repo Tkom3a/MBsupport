@@ -58,23 +58,22 @@ def _session_user(request: web.Request, cfg: AuthConfig) -> str | None:
 def build_middleware(cfg: AuthConfig, *, api_token: str = "") -> Any:
     @web.middleware
     async def middleware(request: web.Request, handler):
+        public = request.path in PUBLIC_PATHS or request.path.startswith("/static/login")
+
         if not cfg.enabled:
-            # Legacy: only WEB_TOKEN if set
-            if api_token and request.path not in PUBLIC_PATHS and request.path not in {
-                "/favicon.ico",
-                "/favicon.png",
-                "/apple-touch-icon.png",
-                "/health",
-            }:
-                if not _machine_token_ok(request, api_token):
-                    return web.Response(status=401, text="Need WEB_TOKEN")
+            # Legacy token gate (WEB_TOKEN / TRADER_TOKEN) — no LDAP login
+            if not api_token or public:
+                return await handler(request)
+            if _machine_token_ok(request, api_token):
                 response = await handler(request)
                 if request.rel_url.query.get("token"):
-                    response.set_cookie("shot_token", api_token, httponly=True, samesite="Lax")
+                    response.set_cookie("shot_token", api_token, httponly=True, samesite="Lax", path="/")
                 return response
-            return await handler(request)
+            if _wants_html(request) and request.method == "GET":
+                raise web.HTTPFound("/login")
+            return web.Response(status=401, text="Need WEB_TOKEN")
 
-        if request.path in PUBLIC_PATHS or request.path.startswith("/static/login"):
+        if public:
             return await handler(request)
 
         user = _session_user(request, cfg)
@@ -86,7 +85,7 @@ def build_middleware(cfg: AuthConfig, *, api_token: str = "") -> Any:
             request["auth_user"] = "token"
             response = await handler(request)
             if request.rel_url.query.get("token"):
-                response.set_cookie("shot_token", api_token, httponly=True, samesite="Lax")
+                response.set_cookie("shot_token", api_token, httponly=True, samesite="Lax", path="/")
             return response
 
         if _wants_html(request) and request.method == "GET":
@@ -98,21 +97,35 @@ def build_middleware(cfg: AuthConfig, *, api_token: str = "") -> Any:
 
 async def _login_page(request: web.Request) -> web.StreamResponse:
     cfg: AuthConfig = request.app["auth_cfg"]
+    api_token = request.app.get("api_token") or ""
+    mode = cfg.mode if cfg.enabled else ("token" if api_token else "off")
     if LOGIN_HTML.is_file():
         text = LOGIN_HTML.read_text(encoding="utf-8").replace("{{BRAND}}", cfg.brand)
-        text = text.replace("{{MODE}}", cfg.mode)
+        text = text.replace("{{MODE}}", mode)
         return web.Response(text=text, content_type="text/html", charset="utf-8")
     return web.Response(text="login.html missing", status=500)
 
 
 async def _api_login(request: web.Request) -> web.Response:
     cfg: AuthConfig = request.app["auth_cfg"]
-    if not cfg.enabled:
-        return web.json_response({"ok": False, "error": "auth disabled"}, status=400)
+    api_token = request.app.get("api_token") or ""
     try:
         body = await request.json()
     except Exception:
         body = {}
+
+    # Legacy: unlock UI with WEB_TOKEN / TRADER_TOKEN typed as password (or token field)
+    if not cfg.enabled and api_token:
+        given = str(body.get("token") or body.get("password") or body.get("username") or "").strip()
+        if given != api_token:
+            return web.json_response({"ok": False, "error": "Неверный токен"}, status=401)
+        resp = web.json_response({"ok": True, "username": "token"})
+        resp.set_cookie("shot_token", api_token, httponly=True, samesite="Lax", max_age=86400 * 7, path="/")
+        return resp
+
+    if not cfg.enabled:
+        return web.json_response({"ok": False, "error": "auth disabled"}, status=400)
+
     username = str(body.get("username") or "")
     password = str(body.get("password") or "")
     result = authenticate(cfg, username, password)

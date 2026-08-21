@@ -78,7 +78,7 @@ def load_trader_config(root: Path | None = None) -> TraderConfig:
             or os.getenv("SESSION_SECRET")
             or ""
         ).strip(),
-        web_token=(os.getenv("WEB_TOKEN") or os.getenv("TRADER_TOKEN") or "").strip(),
+        web_token=(os.getenv("TRADER_TOKEN") or os.getenv("UI_TOKEN") or "").strip(),
         lookback_min=_i("LOOKBACK_MIN", 180),
         poll_sec=max(15, _i("TRADER_POLL_SEC", 60)),
         run_hours=max(0.1, _f("MT_RUN_HOURS", 3.0)),

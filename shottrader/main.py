@@ -72,10 +72,11 @@ class ShotTrader:
 
     async def _start_web(self) -> web.AppRunner:
         auth_cfg = load_auth_config(brand="ShotTrader", token_fallback=self.cfg.web_token)
-        api_token = auth_cfg.resolve_api_token(self.cfg.web_token)
-        app = web.Application(middlewares=make_middlewares(auth_cfg, api_token=api_token))
+        # UI lock ≠ токен для ShotCore. WEB_TOKEN/SHOTCORE_TOKEN не закрывают страницу.
+        ui_token = auth_cfg.resolve_ui_token(self.cfg.web_token)
+        app = web.Application(middlewares=make_middlewares(auth_cfg, api_token=ui_token))
         app["core"] = self
-        attach_auth(app, auth_cfg, api_token=api_token)
+        attach_auth(app, auth_cfg, api_token=ui_token)
         app.router.add_get("/", self._index)
         app.router.add_get("/health", self._health)
         app.router.add_get("/api/state", self._state)
@@ -95,7 +96,7 @@ class ShotTrader:
             self.cfg.host,
             self.cfg.port,
             self.engine.emulate,
-            auth_cfg.mode if auth_cfg.enabled else "off",
+            auth_cfg.mode if auth_cfg.enabled else ("token" if ui_token else "off"),
         )
         return runner
 
