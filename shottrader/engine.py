@@ -337,6 +337,29 @@ class ShotEngine:
         self.halt_reason = ""
         self.note("авто-стоп снят, жду новые записи плана")
 
+    def apply_runtime_settings(self) -> None:
+        """Протянуть order size / leverage с панели на активные клоны."""
+        for algo in self.algos.values():
+            algo.size_usdt = self.order_size
+            algo.lever = self.leverage
+            if algo.state != "hunt":
+                continue
+            # Переставить лимиты с новым размером на следующем follow
+            if not self.emulate and self.broker and self.broker.ready:
+                try:
+                    loop = asyncio.get_running_loop()
+                    if algo.buy_id:
+                        loop.create_task(self.broker.cancel(algo.symbol, algo.buy_id))
+                    if algo.sell_id:
+                        loop.create_task(self.broker.cancel(algo.symbol, algo.sell_id))
+                except RuntimeError:
+                    pass
+            algo.buy_id = ""
+            algo.sell_id = ""
+            algo.buy_px = 0.0
+            algo.sell_px = 0.0
+            algo.qty = "1"
+
     def window_stats(self, hours: float) -> dict[str, Any]:
         cutoff = _now_ms() - int(hours * 3600 * 1000)
         rows = [r for r in self.journal if int(r.get("ts") or 0) >= cutoff]

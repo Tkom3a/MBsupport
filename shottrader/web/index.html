@@ -234,6 +234,15 @@
       return `<td class="${cls}">${fmt(n, 3)}%</td>`;
     }
 
+    function syncInput(id, value) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      // Не затирать поле, пока пользователь печатает / меняет значение
+      if (document.activeElement === el) return;
+      const next = String(value);
+      if (el.value !== next) el.value = next;
+    }
+
     function render() {
       if (!state) return;
       const badge = document.getElementById("modeBadge");
@@ -242,9 +251,9 @@
       const halt = document.getElementById("haltBadge");
       halt.style.display = state.halted ? "inline-flex" : "none";
       if (state.halted) halt.textContent = "АВТО-СТОП: " + (state.halt_reason || "");
-      document.getElementById("orderSize").value = state.order_size;
-      document.getElementById("leverage").value = state.leverage;
-      document.getElementById("autostop").value = state.autostop_usd;
+      syncInput("orderSize", state.order_size);
+      syncInput("leverage", state.leverage);
+      syncInput("autostop", state.autostop_usd);
       document.getElementById("unreal").textContent = money(state.unrealized);
       document.getElementById("unreal").className = "v " + (state.unrealized >= 0 ? "up" : "down");
       document.getElementById("hour").textContent = `${state.hour.trades} / ${money(state.hour.pnl_usd)}`;
@@ -313,15 +322,24 @@
     }
 
     document.getElementById("saveBtn").onclick = async () => {
-      await api("/api/settings", {
-        method: "POST",
-        body: JSON.stringify({
-          order_size: Number(document.getElementById("orderSize").value),
-          leverage: Number(document.getElementById("leverage").value),
-          autostop_usd: Number(document.getElementById("autostop").value),
-        }),
-      });
-      tick();
+      const btn = document.getElementById("saveBtn");
+      btn.disabled = true;
+      try {
+        await api("/api/settings", {
+          method: "POST",
+          body: JSON.stringify({
+            order_size: Number(document.getElementById("orderSize").value),
+            leverage: Number(document.getElementById("leverage").value),
+            autostop_usd: Number(document.getElementById("autostop").value),
+          }),
+        });
+        document.activeElement && document.activeElement.blur && document.activeElement.blur();
+        await tick();
+      } catch (ex) {
+        alert("Не удалось сохранить: " + (ex.message || ex));
+      } finally {
+        btn.disabled = false;
+      }
     };
     document.getElementById("panicBtn").onclick = () => api("/api/panic", { method: "POST", body: "{}" }).then(tick);
     document.getElementById("resumeBtn").onclick = () => api("/api/resume", { method: "POST", body: "{}" }).then(tick);

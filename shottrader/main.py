@@ -125,10 +125,19 @@ class ShotTrader:
             self.cfg.autostop_usd = self.engine.autostop_usd
         if "shotcore_url" in body:
             self._apply_shotcore_url(str(body.get("shotcore_url") or ""))
+        # Применить size/lever к уже запущенным клонам (autostop читается с engine всегда)
+        self.engine.apply_runtime_settings()
         self.engine.note(
             f"настройки: size={self.engine.order_size:g} x{self.engine.leverage} autostop={self.engine.autostop_usd:g}$"
         )
-        return web.json_response({"ok": True})
+        return web.json_response(
+            {
+                "ok": True,
+                "order_size": self.engine.order_size,
+                "leverage": self.engine.leverage,
+                "autostop_usd": self.engine.autostop_usd,
+            }
+        )
 
     async def _set_shotcore(self, request: web.Request) -> web.Response:
         body = await request.json()
