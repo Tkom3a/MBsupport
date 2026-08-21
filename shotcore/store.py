@@ -256,8 +256,10 @@ class ShotStore:
             pnls = [float(x["pnl_pct"]) for x in shots]
             last = shots[-1]
             ordered = sorted(percents)
-            suggest, plus_n, minus_n, win_prob, suggest_tp, filter_hint = _recommend_and_score(
-                shots,
+            down_shots = [x for x in shots if x["direction"] == "DOWN"]
+            up_shots = [x for x in shots if x["direction"] == "UP"]
+            buy_d, buy_plus, buy_minus, buy_win, buy_tp, buy_hint = _recommend_and_score(
+                down_shots,
                 self.hold_ms,
                 self.suggest_inside_pct,
                 self.distance_levels,
@@ -265,6 +267,24 @@ class ShotStore:
                 min_win_pct=self.min_win_pct,
                 min_fills=self.min_fills,
             )
+            sell_d, sell_plus, sell_minus, sell_win, sell_tp, sell_hint = _recommend_and_score(
+                up_shots,
+                self.hold_ms,
+                self.suggest_inside_pct,
+                self.distance_levels,
+                inside_max=self.suggest_inside_max_pct,
+                min_win_pct=self.min_win_pct,
+                min_fills=self.min_fills,
+            )
+            # Сводная колонка — лучшая из сторон, без смешивания UP+DOWN в одну D.
+            if buy_d > 0 and (sell_d <= 0 or (buy_plus, buy_win) >= (sell_plus, sell_win)):
+                suggest, plus_n, minus_n, win_prob, suggest_tp, filter_hint = (
+                    buy_d, buy_plus, buy_minus, buy_win, buy_tp, f"BUY {buy_hint}".strip()
+                )
+            else:
+                suggest, plus_n, minus_n, win_prob, suggest_tp, filter_hint = (
+                    sell_d, sell_plus, sell_minus, sell_win, sell_tp, (f"SHORT {sell_hint}".strip() if sell_d else "")
+                )
             rows.append(
                 {
                     "symbol": symbol,
@@ -281,6 +301,16 @@ class ShotStore:
                     "max": round(ordered[-1], 4),
                     "suggest_distance": suggest,
                     "suggest_tp_pct": suggest_tp,
+                    "buy_pct": buy_d,
+                    "buy_tp_pct": buy_tp,
+                    "buy_win_prob": buy_win,
+                    "buy_score_text": f"{buy_plus}/{buy_minus}" if buy_d else "",
+                    "buy_filter_hint": buy_hint,
+                    "sell_pct": sell_d,
+                    "sell_tp_pct": sell_tp,
+                    "sell_win_prob": sell_win,
+                    "sell_score_text": f"{sell_plus}/{sell_minus}" if sell_d else "",
+                    "sell_filter_hint": sell_hint,
                     "filter_hint": filter_hint,
                     "score_plus": plus_n,
                     "score_minus": minus_n,
@@ -328,6 +358,10 @@ class ShotStore:
                     "count",
                     "suggest_distance",
                     "suggest_tp_pct",
+                    "buy_pct",
+                    "buy_tp_pct",
+                    "sell_pct",
+                    "sell_tp_pct",
                     "filter_hint",
                     "score_plus",
                     "score_minus",
@@ -360,9 +394,10 @@ class ShotStore:
         active = {str(x) for x in (subscribed or [])}
         pairs = []
         for row in payload.get("rows") or []:
+            buy_pct = round(float(row.get("buy_pct") or 0), 4)
+            sell_pct = round(float(row.get("sell_pct") or 0), 4)
             recommend = round(float(row.get("suggest_distance") or 0), 4)
-            win = float(row.get("win_prob") or 0)
-            if recommend <= 0 or win + 1e-9 < self.min_win_pct:
+            if buy_pct <= 0 and sell_pct <= 0 and recommend <= 0:
                 continue
             symbol = str(row.get("symbol") or "")
             if not symbol:
@@ -374,6 +409,12 @@ class ShotStore:
                     "base": symbol.split("-")[0],
                     "recommend_pct": recommend,
                     "tp_pct": tp,
+                    "buy_pct": buy_pct,
+                    "buy_tp_pct": round(float(row.get("buy_tp_pct") or 0), 4),
+                    "buy_win_prob": float(row.get("buy_win_prob") or 0),
+                    "sell_pct": sell_pct,
+                    "sell_tp_pct": round(float(row.get("sell_tp_pct") or 0), 4),
+                    "sell_win_prob": float(row.get("sell_win_prob") or 0),
                     "hold_ms": hold_ms,
                     "run_hours": hours,
                     "lever": int(round(float(row.get("lever") or 0))),
@@ -386,7 +427,7 @@ class ShotStore:
                 }
             )
         return {
-            "schema": "shotcore.mt_plan.v1",
+            "schema": "shotcore.mt_plan.v2",
             "updated_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "updated_ts": int(now.timestamp() * 1000),
             "run_hours": hours,
@@ -414,6 +455,10 @@ class ShotStore:
             "base",
             "recommend_pct",
             "tp_pct",
+            "buy_pct",
+            "buy_tp_pct",
+            "sell_pct",
+            "sell_tp_pct",
             "hold_ms",
             "run_hours",
             "lever",
@@ -433,6 +478,10 @@ class ShotStore:
                     "base": pair["base"],
                     "recommend_pct": pair["recommend_pct"],
                     "tp_pct": pair["tp_pct"],
+                    "buy_pct": pair.get("buy_pct") or 0,
+                    "buy_tp_pct": pair.get("buy_tp_pct") or 0,
+                    "sell_pct": pair.get("sell_pct") or 0,
+                    "sell_tp_pct": pair.get("sell_tp_pct") or 0,
                     "hold_ms": pair["hold_ms"],
                     "run_hours": pair["run_hours"],
                     "lever": pair["lever"],

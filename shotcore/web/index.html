@@ -171,8 +171,10 @@
             <th>Пара</th>
             <th>Плечо</th>
             <th>Прострелы</th>
-            <th>Рекомендация</th>
-            <th>TP</th>
+            <th>BUY D</th>
+            <th>SHORT D</th>
+            <th>BUY TP</th>
+            <th>SHORT TP</th>
             <th>Фильтр</th>
             <th>Счет+%</th>
             <th>Вер.</th>
@@ -180,7 +182,7 @@
             <th>Последний</th>
           </tr>
         </thead>
-        <tbody id="rows"><tr><td class="empty" colspan="10">Пока нет прострелов в выбранном окне</td></tr></tbody>
+        <tbody id="rows"><tr><td class="empty" colspan="12">Пока нет прострелов в выбранном окне</td></tr></tbody>
       </table>
     </section>
     <section class="panel feed-wrap">
@@ -404,18 +406,20 @@
       const rows = lastRows.filter(r => !needle || r.symbol.toLowerCase().includes(needle));
       const body = document.getElementById("rows");
       if (!rows.length) {
-        body.innerHTML = `<tr><td class="empty" colspan="10">Нет прострелов в выбранном окне</td></tr>`;
+        body.innerHTML = `<tr><td class="empty" colspan="12">Нет прострелов в выбранном окне</td></tr>`;
       } else {
         body.innerHTML = rows.map(r => `
           <tr data-symbol="${r.symbol}">
             <td>${r.symbol}</td>
             <td class="amber">${lever(r.lever)}</td>
             <td>${r.count} <span class="down">${r.count_down}</span>/<span class="up">${r.count_up}</span></td>
-            <td class="amber">${r.suggest_distance > 0 ? fmt(r.suggest_distance) + "%" : "—"}</td>
-            <td class="amber">${r.suggest_tp_pct > 0 ? fmt(r.suggest_tp_pct) + "%" : "—"}</td>
+            <td class="up">${r.buy_pct > 0 ? fmt(r.buy_pct) + "%" : "—"}</td>
+            <td class="down">${r.sell_pct > 0 ? fmt(r.sell_pct) + "%" : "—"}</td>
+            <td class="up">${r.buy_tp_pct > 0 ? fmt(r.buy_tp_pct) + "%" : "—"}</td>
+            <td class="down">${r.sell_tp_pct > 0 ? fmt(r.sell_tp_pct) + "%" : "—"}</td>
             <td class="meta">${r.filter_hint || "—"}</td>
-            <td class="amber">${r.suggest_distance > 0 ? (r.score_text || "0/0") : "—"}</td>
-            <td>${r.suggest_distance > 0 ? fmt(r.win_prob || 0, 0) + "%" : "—"}</td>
+            <td class="amber">${(r.buy_pct > 0 || r.sell_pct > 0 || r.suggest_distance > 0) ? (r.score_text || "0/0") : "—"}</td>
+            <td>${(r.buy_pct > 0 || r.sell_pct > 0 || r.suggest_distance > 0) ? fmt(r.win_prob || 0, 0) + "%" : "—"}</td>
             <td>${fmt(r.p50)} / ${fmt(r.p90)}</td>
             <td class="${dirClass(r.last_direction)}">${r.last_direction} ${fmt(r.last_percent)} · ${r.last_time}</td>
           </tr>`).join("");

@@ -184,7 +184,13 @@ class ShotTrader:
                 plan = await self._fetch_plan()
                 raw = list(plan.get("pairs") or [])
                 # План уже отфильтрован ShotCore (D>0 и плюс ≥ min_win). Здесь только валидность.
-                pairs = [p for p in raw if float(p.get("recommend_pct") or 0) > 0]
+                pairs = [
+                    p
+                    for p in raw
+                    if float(p.get("buy_pct") or 0) > 0
+                    or float(p.get("sell_pct") or 0) > 0
+                    or float(p.get("recommend_pct") or 0) > 0
+                ]
                 started = self.engine.sync_plan(pairs)
                 self.engine.plan_error = ""
                 self.engine.plan_updated_ts = int(time.time() * 1000)

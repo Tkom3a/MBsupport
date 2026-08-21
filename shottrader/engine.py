@@ -55,15 +55,33 @@ class Tape:
         return px or self.last
 
 
+def _sides_from_pair(pair: dict[str, Any]) -> tuple[float, float, float, float]:
+    """BUY из DOWN-прострелов, SHORT из UP. Старый план — одна D на обе стороны."""
+    buy_d = round(float(pair.get("buy_pct") or 0), 2)
+    sell_d = round(float(pair.get("sell_pct") or 0), 2)
+    buy_tp = round(float(pair.get("buy_tp_pct") or 0), 2)
+    sell_tp = round(float(pair.get("sell_tp_pct") or 0), 2)
+    if buy_d <= 0 and sell_d <= 0:
+        d = round(float(pair.get("recommend_pct") or 0), 2)
+        tp = round(float(pair.get("tp_pct") or 0), 2)
+        buy_d = sell_d = d
+        buy_tp = sell_tp = tp
+    return buy_d, buy_tp, sell_d, sell_tp
+
+
 @dataclass
 class Algo:
     symbol: str
     distance: float
     tp: float
-    lever: int
-    size_usdt: float
-    started_ts: int
-    until_ts: int
+    buy_distance: float = 0.0
+    sell_distance: float = 0.0
+    buy_tp: float = 0.0
+    sell_tp: float = 0.0
+    lever: int = 50
+    size_usdt: float = 10.0
+    started_ts: int = 0
+    until_ts: int = 0
     buy_px: float = 0.0
     sell_px: float = 0.0
     buy_id: str = ""
@@ -136,9 +154,8 @@ class ShotEngine:
         wanted: dict[str, dict[str, Any]] = {}
         for pair in pairs:
             symbol = str(pair.get("symbol") or "").upper()
-            dist = round(float(pair.get("recommend_pct") or 0), 2)
-            tp = round(float(pair.get("tp_pct") or 0), 2)
-            if not symbol or dist <= 0:
+            buy_d, _buy_tp, sell_d, _sell_tp = _sides_from_pair(pair)
+            if not symbol or (buy_d <= 0 and sell_d <= 0):
                 continue
             wanted[symbol] = pair
         started: list[str] = []
@@ -151,9 +168,10 @@ class ShotEngine:
             fresh = wanted.get(symbol)
             if fresh is None:
                 continue
-            fp = f"{round(float(fresh.get('recommend_pct') or 0), 2)}|{round(float(fresh.get('tp_pct') or 0), 2)}"
+            buy_d, buy_tp, sell_d, sell_tp = _sides_from_pair(fresh)
+            fp = f"{buy_d}|{buy_tp}|{sell_d}|{sell_tp}"
             if fp != algo.fingerprint:
-                self.note(f"{symbol} новая рекомендация {fp} — перезапуск клона")
+                self.note(f"{symbol} новая рекомендация BUY {buy_d}/SHORT {sell_d} — перезапуск клона")
                 self._kill(symbol, "replaced")
         for symbol, pair in wanted.items():
             if self.halted:
@@ -168,23 +186,33 @@ class ShotEngine:
 
     def _start(self, pair: dict[str, Any]) -> None:
         symbol = str(pair.get("symbol") or "").upper()
-        dist = round(float(pair.get("recommend_pct") or 0), 2)
-        tp = round(float(pair.get("tp_pct") or 0), 2)
+        buy_d, buy_tp, sell_d, sell_tp = _sides_from_pair(pair)
         lever = int(pair.get("lever") or self.leverage) or self.leverage
         now = _now_ms()
+        dist = buy_d if buy_d > 0 else sell_d
+        tp = buy_tp if buy_d > 0 else sell_tp
         algo = Algo(
             symbol=symbol,
             distance=dist,
             tp=tp,
+            buy_distance=buy_d,
+            sell_distance=sell_d,
+            buy_tp=buy_tp,
+            sell_tp=sell_tp,
             lever=lever,
             size_usdt=self.order_size,
             started_ts=now,
             until_ts=now + int(self.cfg.run_hours * 3600 * 1000),
-            fingerprint=f"{dist}|{tp}",
+            fingerprint=f"{buy_d}|{buy_tp}|{sell_d}|{sell_tp}",
         )
         self.algos[symbol] = algo
+        sides = []
+        if buy_d > 0:
+            sides.append(f"BUY D{buy_d}% TP{buy_tp}%")
+        if sell_d > 0:
+            sides.append(f"SHORT D{sell_d}% TP{sell_tp}%")
         self.note(
-            f"старт {symbol} D{dist}% TP{tp}% x{lever} size={self.order_size:g} "
+            f"старт {symbol} {' · '.join(sides) or 'нет сторон'} x{lever} size={self.order_size:g} "
             f"{'эмуляция' if self.emulate else 'LIVE'} на {self.cfg.run_hours:g}ч"
         )
 
@@ -220,28 +248,46 @@ class ShotEngine:
             px = self.tapes[algo.symbol].delayed(self.cfg.follow_delay_ms, now)
             if px <= 0:
                 continue
-            buy = px * (1.0 - algo.distance / 100.0)
-            sell = px * (1.0 + algo.distance / 100.0)
-            moved = abs(buy - algo.buy_px) / px * 100.0 if algo.buy_px else 99
+            buy = px * (1.0 - algo.buy_distance / 100.0) if algo.buy_distance > 0 else 0.0
+            sell = px * (1.0 + algo.sell_distance / 100.0) if algo.sell_distance > 0 else 0.0
+            moved = 0.0
+            if buy > 0:
+                moved = max(moved, abs(buy - algo.buy_px) / px * 100.0 if algo.buy_px else 99)
+            if sell > 0:
+                moved = max(moved, abs(sell - algo.sell_px) / px * 100.0 if algo.sell_px else 99)
             if moved < 0.01:
                 continue
             algo.buy_px = buy
             algo.sell_px = sell
+            if buy <= 0 and algo.buy_id and self.broker and not self.emulate:
+                try:
+                    await self.broker.cancel(algo.symbol, algo.buy_id)
+                except Exception:
+                    pass
+                algo.buy_id = ""
+            if sell <= 0 and algo.sell_id and self.broker and not self.emulate:
+                try:
+                    await self.broker.cancel(algo.symbol, algo.sell_id)
+                except Exception:
+                    pass
+                algo.sell_id = ""
             if self.emulate or not (self.broker and self.broker.ready):
                 continue
             try:
                 await self.broker.load_spec(algo.symbol)
                 algo.qty = self.broker.contracts_for(algo.symbol, algo.size_usdt, px)
-                bpx = self.broker.round_px(algo.symbol, buy)
-                spx = self.broker.round_px(algo.symbol, sell)
-                if algo.buy_id:
-                    await self.broker.amend(algo.symbol, algo.buy_id, bpx)
-                else:
-                    algo.buy_id = await self.broker.place_limit(algo.symbol, "buy", bpx, algo.qty)
-                if algo.sell_id:
-                    await self.broker.amend(algo.symbol, algo.sell_id, spx)
-                else:
-                    algo.sell_id = await self.broker.place_limit(algo.symbol, "sell", spx, algo.qty)
+                if buy > 0:
+                    bpx = self.broker.round_px(algo.symbol, buy)
+                    if algo.buy_id:
+                        await self.broker.amend(algo.symbol, algo.buy_id, bpx)
+                    else:
+                        algo.buy_id = await self.broker.place_limit(algo.symbol, "buy", bpx, algo.qty)
+                if sell > 0:
+                    spx = self.broker.round_px(algo.symbol, sell)
+                    if algo.sell_id:
+                        await self.broker.amend(algo.symbol, algo.sell_id, spx)
+                    else:
+                        algo.sell_id = await self.broker.place_limit(algo.symbol, "sell", spx, algo.qty)
             except Exception as exc:
                 self.note(f"{algo.symbol} follow: {exc}")
 
@@ -268,18 +314,23 @@ class ShotEngine:
                 pass
         algo.buy_id = ""
         algo.sell_id = ""
-        self.note(f"вход {algo.symbol} {side.upper()} @ {px:.6g} D{algo.distance}%")
+        d = algo.buy_distance if side == "buy" else algo.sell_distance
+        tp = algo.buy_tp if side == "buy" else algo.sell_tp
+        algo.distance = d
+        algo.tp = tp
+        self.note(f"вход {algo.symbol} {side.upper()} @ {px:.6g} D{d}% size={algo.size_usdt:g}$")
 
     def _maybe_exit(self, algo: Algo, ts: int, price: float) -> None:
         if algo.state != "pos" or algo.entry <= 0:
             return
         favor = (price - algo.entry) / algo.entry * 100.0 if algo.pos_side == "buy" else (algo.entry - price) / algo.entry * 100.0
-        hit_tp = algo.tp > 0 and favor + 1e-12 >= algo.tp
+        tp = algo.buy_tp if algo.pos_side == "buy" else algo.sell_tp
+        hit_tp = tp > 0 and favor + 1e-12 >= tp
         timed = ts - algo.fill_ts >= self.cfg.hold_ms
         if not hit_tp and not timed:
             return
-        exit_px = algo.entry * (1 + algo.tp / 100.0) if hit_tp and algo.pos_side == "buy" else (
-            algo.entry * (1 - algo.tp / 100.0) if hit_tp else price
+        exit_px = algo.entry * (1 + tp / 100.0) if hit_tp and algo.pos_side == "buy" else (
+            algo.entry * (1 - tp / 100.0) if hit_tp else price
         )
         self._close(algo, exit_px, "TP" if hit_tp else "0.3с")
 
@@ -293,8 +344,9 @@ class ShotEngine:
             "exit": exit_px,
             "pnl_usd": pnl,
             "why": why,
-            "distance": algo.distance,
-            "tp": algo.tp,
+            "distance": algo.buy_distance if algo.pos_side == "buy" else algo.sell_distance,
+            "tp": algo.buy_tp if algo.pos_side == "buy" else algo.sell_tp,
+            "size_usdt": algo.size_usdt,
             "emulate": self.emulate,
         }
         self._write_trade(row)
@@ -393,15 +445,24 @@ class ShotEngine:
             buy_dist = ((last - a.buy_px) / last * 100.0) if last > 0 and a.buy_px > 0 else None
             sell_dist = ((a.sell_px - last) / last * 100.0) if last > 0 and a.sell_px > 0 else None
             u_pnl = 0.0
-            if a.state == "pos" and a.entry > 0 and last > 0:
-                u_pnl = _pnl_usd(a.pos_side, a.entry, last, a.size_usdt)
+            in_trade = 0.0
+            if a.state == "pos" and a.entry > 0:
+                in_trade = a.size_usdt
+                if last > 0:
+                    u_pnl = _pnl_usd(a.pos_side, a.entry, last, a.size_usdt)
             markets.append(
                 {
                     "symbol": a.symbol,
                     "last": last,
                     "distance": a.distance,
+                    "buy_distance": a.buy_distance,
+                    "sell_distance": a.sell_distance,
                     "tp": a.tp,
+                    "buy_tp": a.buy_tp,
+                    "sell_tp": a.sell_tp,
                     "lever": a.lever,
+                    "size_usdt": a.size_usdt,
+                    "in_trade": round(in_trade, 4),
                     "state": a.state,
                     "side": a.pos_side,
                     "entry": a.entry,
@@ -414,6 +475,7 @@ class ShotEngine:
                 }
             )
         markets.sort(key=lambda row: row["symbol"])
+        in_trade_total = round(sum(float(r.get("in_trade") or 0) for r in markets), 4)
         return {
             "emulate": self.emulate,
             "live": (not self.emulate) and bool(self.broker and self.broker.ready),
@@ -426,6 +488,7 @@ class ShotEngine:
             "hold_ms": self.cfg.hold_ms,
             "run_hours": self.cfg.run_hours,
             "unrealized": self.unrealized(),
+            "in_trade": in_trade_total,
             "hour": hour,
             "day": day,
             "view": view,

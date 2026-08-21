@@ -131,6 +131,7 @@
         <button id="resumeBtn" style="margin-top:6px">Снять авто-стоп</button>
         <h2 style="margin-top:14px">Сессия</h2>
         <div class="kpi"><div class="l">Нереализ.</div><div class="v" id="unreal">0.00$</div></div>
+        <div class="kpi"><div class="l">В сделках</div><div class="v" id="inTrade">0$</div></div>
         <div class="kpi"><div class="l">1 час · сделки / PnL</div><div class="v" id="hour">0 / 0$</div></div>
         <div class="kpi"><div class="l">24 часа · сделки / PnL</div><div class="v" id="day">0 / 0$</div></div>
         <button type="button" class="log-toggle" id="logToggle" aria-expanded="false">
@@ -153,23 +154,24 @@
                 <th>Цена</th>
                 <th>BUY</th>
                 <th>до BUY</th>
+                <th>D BUY</th>
                 <th>SELL</th>
                 <th>до SELL</th>
-                <th>D%</th>
-                <th>TP%</th>
+                <th>D SHORT</th>
+                <th>Сумма</th>
                 <th>Сост.</th>
                 <th>PnL</th>
                 <th>мин</th>
               </tr>
             </thead>
-            <tbody id="markets"><tr><td colspan="11" class="muted">ожидание клонов</td></tr></tbody>
+            <tbody id="markets"><tr><td colspan="12" class="muted">ожидание клонов</td></tr></tbody>
           </table>
         </div>
       </section>
       <aside class="right">
         <h2>План ShotCore</h2>
         <table>
-          <thead><tr><th>Пара</th><th>D</th><th>TP</th><th>+</th></tr></thead>
+          <thead><tr><th>Пара</th><th>BUY</th><th>SHORT</th><th>+</th></tr></thead>
           <tbody id="plan"></tbody>
         </table>
         <h2 style="margin-top:12px">Сделки</h2>
@@ -256,6 +258,7 @@
       syncInput("autostop", state.autostop_usd);
       document.getElementById("unreal").textContent = money(state.unrealized);
       document.getElementById("unreal").className = "v " + (state.unrealized >= 0 ? "up" : "down");
+      document.getElementById("inTrade").textContent = fmt(state.in_trade || 0) + "$";
       document.getElementById("hour").textContent = `${state.hour.trades} / ${money(state.hour.pnl_usd)}`;
       document.getElementById("day").textContent = `${state.day.trades} / ${money(state.day.pnl_usd)}`;
       document.getElementById("planMeta").textContent = state.plan_error
@@ -272,8 +275,8 @@
       const body = document.getElementById("markets");
       if (!rows.length) {
         body.innerHTML = state.plan_error
-          ? `<tr><td colspan="11" class="muted">нет клонов — ShotCore недоступен: ${state.plan_error}</td></tr>`
-          : `<tr><td colspan="11" class="muted">ожидание клонов из плана ShotCore</td></tr>`;
+          ? `<tr><td colspan="12" class="muted">нет клонов — ShotCore недоступен: ${state.plan_error}</td></tr>`
+          : `<tr><td colspan="12" class="muted">ожидание клонов из плана ShotCore</td></tr>`;
       } else {
         body.innerHTML = rows.map((x) => {
           const sel = x.symbol === state.view ? "sel" : "";
@@ -283,15 +286,21 @@
           const u = x.state === "pos"
             ? `<span class="${Number(x.unrealized) >= 0 ? "up" : "down"}">${money(x.unrealized)}</span>`
             : "—";
+          const sum = x.state === "pos"
+            ? `<span class="amber">${fmt(x.in_trade || x.size_usdt)} $</span>`
+            : `<span class="muted">${fmt(x.size_usdt)} $</span>`;
+          const dBuy = Number(x.buy_distance) > 0 ? fmt(x.buy_distance) : "—";
+          const dSell = Number(x.sell_distance) > 0 ? fmt(x.sell_distance) : "—";
           return `<tr class="${sel}" data-sym="${x.symbol}">
             <td>${x.symbol}</td>
             <td class="amber">${px(x.last)}</td>
             <td class="up">${px(x.buy)}</td>
             ${distCell(x.buy_dist_pct)}
+            <td class="up">${dBuy}</td>
             <td class="down">${px(x.sell)}</td>
             ${distCell(x.sell_dist_pct)}
-            <td class="amber">${fmt(x.distance)}</td>
-            <td>${fmt(x.tp)}</td>
+            <td class="down">${dSell}</td>
+            <td>${sum}</td>
             <td>${st}</td>
             <td>${u}</td>
             <td>${x.left_min}</td>
@@ -306,8 +315,10 @@
       }
 
       document.getElementById("plan").innerHTML = (state.plan || []).slice(0, 20).map((p) => `
-        <tr><td>${(p.symbol || "").split("-")[0]}</td><td class="amber">${fmt(p.recommend_pct)}</td>
-        <td>${fmt(p.tp_pct)}</td><td>${fmt(p.win_prob || 0, 0)}%</td></tr>`).join("")
+        <tr><td>${(p.symbol || "").split("-")[0]}</td>
+        <td class="up">${Number(p.buy_pct) > 0 ? fmt(p.buy_pct) : "—"}</td>
+        <td class="down">${Number(p.sell_pct) > 0 ? fmt(p.sell_pct) : (Number(p.recommend_pct) > 0 && !p.buy_pct ? fmt(p.recommend_pct) : "—")}</td>
+        <td>${fmt(p.win_prob || 0, 0)}%</td></tr>`).join("")
         || `<tr><td colspan="4" class="muted">пустой план</td></tr>`;
       document.getElementById("journal").innerHTML = [...(state.journal || [])].reverse().slice(0, 25).map((j) => `
         <tr><td>${(j.symbol || "").split("-")[0]}</td><td>${j.side}</td>
