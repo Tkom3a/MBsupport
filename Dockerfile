@@ -12,6 +12,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY shotcore ./shotcore
+COPY mbauth ./mbauth
 COPY config.yaml .
 
 RUN mkdir -p /app/data /app/logs

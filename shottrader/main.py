@@ -17,6 +17,9 @@ from .config import TraderConfig, load_trader_config
 from .engine import ShotEngine
 from .okx_broker import OkxBroker
 
+from mbauth import load_auth_config
+from mbauth.web import attach_auth, make_middlewares
+
 log = logging.getLogger("shottrader")
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
@@ -67,8 +70,10 @@ class ShotTrader:
                 await runner.cleanup()
 
     async def _start_web(self) -> web.AppRunner:
-        app = web.Application()
+        auth_cfg = load_auth_config(brand="ShotTrader", token_fallback=self.cfg.web_token)
+        app = web.Application(middlewares=make_middlewares(auth_cfg, api_token=self.cfg.web_token))
         app["core"] = self
+        attach_auth(app, auth_cfg, api_token=self.cfg.web_token)
         app.router.add_get("/", self._index)
         app.router.add_get("/health", self._health)
         app.router.add_get("/api/state", self._state)
@@ -82,7 +87,13 @@ class ShotTrader:
         await runner.setup()
         site = web.TCPSite(runner, self.cfg.host, self.cfg.port)
         await site.start()
-        log.info("ShotTrader UI http://%s:%s/  emulate=%s", self.cfg.host, self.cfg.port, self.engine.emulate)
+        log.info(
+            "ShotTrader UI http://%s:%s/  emulate=%s auth=%s",
+            self.cfg.host,
+            self.cfg.port,
+            self.engine.emulate,
+            auth_cfg.mode if auth_cfg.enabled else "off",
+        )
         return runner
 
     async def _health(self, _request: web.Request) -> web.Response:

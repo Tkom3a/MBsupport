@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{BRAND}} · вход</title>
+  <style>
+    :root {
+      --bg: #0a0c10; --panel: #12161e; --line: #262c38; --text: #d7deea;
+      --muted: #8b95a8; --amber: #d7a13b; --down: #e15b64; --chip: #1d2430;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; min-height: 100%; background:
+        radial-gradient(ellipse 80% 50% at 50% -10%, #2a2214 0%, transparent 55%),
+        linear-gradient(180deg, #0e1218, var(--bg));
+      color: var(--text); font: 14px/1.4 "Segoe UI", system-ui, sans-serif;
+    }
+    .wrap {
+      min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px;
+    }
+    .card {
+      width: 100%; max-width: 380px; background: var(--panel);
+      border: 1px solid var(--line); border-radius: 12px; padding: 28px 26px 24px;
+      box-shadow: 0 24px 60px #0008;
+    }
+    .brand { font-size: 22px; font-weight: 700; letter-spacing: 0.04em; margin: 0 0 4px; }
+    .brand span { color: var(--amber); }
+    .sub { color: var(--muted); font-size: 12px; margin-bottom: 20px; }
+    label { display: block; color: var(--muted); font-size: 11px; margin: 12px 0 4px; text-transform: uppercase; letter-spacing: 0.04em; }
+    input {
+      width: 100%; background: var(--chip); color: var(--text); border: 1px solid var(--line);
+      border-radius: 7px; padding: 10px 12px; font: inherit;
+    }
+    input:focus { outline: none; border-color: #6a5420; }
+    button {
+      width: 100%; margin-top: 18px; padding: 11px 12px; border-radius: 7px; cursor: pointer;
+      font: inherit; font-weight: 650; border: 1px solid #6a5420;
+      background: linear-gradient(180deg, #3a2e14, #221c10); color: #ffe08a;
+    }
+    button:hover { border-color: var(--amber); }
+    button:disabled { opacity: 0.55; cursor: wait; }
+    .err { color: var(--down); font-size: 13px; min-height: 1.2em; margin-top: 12px; }
+    .mode { font-size: 11px; color: var(--muted); margin-top: 14px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <form class="card" id="form" autocomplete="on">
+      <h1 class="brand"><span>{{BRAND}}</span></h1>
+      <div class="sub">Введите учётные данные для доступа</div>
+      <label for="username">Логин</label>
+      <input id="username" name="username" autocomplete="username" required autofocus />
+      <label for="password">Пароль</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required />
+      <button type="submit" id="btn">Войти</button>
+      <div class="err" id="err"></div>
+      <div class="mode">режим: {{MODE}}</div>
+    </form>
+  </div>
+  <script>
+    const form = document.getElementById("form");
+    const err = document.getElementById("err");
+    const btn = document.getElementById("btn");
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      err.textContent = "";
+      btn.disabled = true;
+      try {
+        const res = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: document.getElementById("username").value,
+            password: document.getElementById("password").value,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+          err.textContent = data.error || "Ошибка входа";
+          btn.disabled = false;
+          return;
+        }
+        location.href = "/";
+      } catch (ex) {
+        err.textContent = String(ex.message || ex);
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

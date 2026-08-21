@@ -113,6 +113,7 @@
       <span class="badge" id="haltBadge" style="display:none">АВТО-СТОП</span>
       <div class="grow"></div>
       <span id="planMeta" class="muted">план ShotCore…</span>
+      <a id="linkLogout" href="/logout" class="muted" style="display:none;margin-left:10px;text-decoration:none">Выход</a>
     </div>
     <div class="main">
       <aside class="side">
@@ -189,6 +190,10 @@
     const qs = new URLSearchParams(location.search);
     const coreUrl = qs.get("core") || `${location.protocol}//${location.hostname}:4861/`;
     document.getElementById("linkCore").href = coreUrl;
+    fetch("/api/auth/status").then((r) => r.json()).then((s) => {
+      const out = document.getElementById("linkLogout");
+      if (out && s.enabled) out.style.display = "";
+    }).catch(() => {});
 
     async function api(path, opts) {
       const res = await fetch(path, {

@@ -50,6 +50,10 @@
     }
     .nav a.trader .nav-title small { color: #a88b3a; }
     .nav a:hover { color: var(--text); border-color: #3a4a66; }
+    .nav a.logout {
+      margin-left: auto; color: var(--muted); border-style: dashed; font-weight: 500;
+    }
+    .nav a.logout:hover { color: var(--down); border-color: #7a323c; }
     h1 { margin: 0; font-size: 20px; letter-spacing: 0.04em; font-weight: 650; }
     h1 span { color: var(--amber); }
     h2 { margin: 0; font-size: 13px; color: var(--muted); font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
@@ -133,6 +137,7 @@
     <a class="trader" id="linkTrader" href="#">
       <span class="nav-title">ShotTrader<small>терминал · :4863</small></span>
     </a>
+    <a class="logout" id="linkLogout" href="/logout" style="display:none">Выход</a>
   </nav>
   <div class="kpis">
     <div class="kpi"><div class="lbl">Пары с прострелами</div><div class="val" id="kpiPairs">—</div></div>
@@ -256,6 +261,10 @@
       url.searchParams.set("core", location.origin + "/");
       traderLink.href = url.toString();
     }
+    fetch("/api/auth/status").then((r) => r.json()).then((s) => {
+      const out = document.getElementById("linkLogout");
+      if (out && s.enabled) out.style.display = "";
+    }).catch(() => {});
     const savedLookback = localStorage.getItem("shotcore_lookback");
     if (savedLookback != null) lookbackEl.value = savedLookback;
     const savedLever = localStorage.getItem("shotcore_lever");

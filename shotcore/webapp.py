@@ -6,6 +6,9 @@ from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
+from mbauth import load_auth_config
+from mbauth.web import attach_auth, make_middlewares
+
 from .config import public_filters
 
 if TYPE_CHECKING:
@@ -15,8 +18,10 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 
 
 def build_app(core: ShotCore) -> web.Application:
-    app = web.Application(middlewares=[_auth_middleware(core)])
+    auth_cfg = load_auth_config(brand="ShotCore", token_fallback=core.cfg.web.token)
+    app = web.Application(middlewares=make_middlewares(auth_cfg, api_token=core.cfg.web.token))
     app["core"] = core
+    attach_auth(app, auth_cfg, api_token=core.cfg.web.token)
     app.router.add_get("/", _index)
     app.router.add_get("/health", _health)
     app.router.add_get("/favicon.ico", _favicon_ico)
@@ -29,30 +34,6 @@ def build_app(core: ShotCore) -> web.Application:
     if WEB_DIR.is_dir():
         app.router.add_static("/static", WEB_DIR)
     return app
-
-
-def _auth_middleware(core: ShotCore):
-    @web.middleware
-    async def middleware(request: web.Request, handler):
-        token = core.cfg.web.token
-        if not token:
-            return await handler(request)
-        given = (
-            request.rel_url.query.get("token")
-            or request.headers.get("X-Shot-Token")
-            or request.cookies.get("shot_token")
-            or ""
-        )
-        if request.path in {"/health", "/favicon.ico", "/favicon.png", "/apple-touch-icon.png"}:
-            return await handler(request)
-        if given != token:
-            return web.Response(status=401, text="Need WEB_TOKEN")
-        response = await handler(request)
-        if request.rel_url.query.get("token"):
-            response.set_cookie("shot_token", token, httponly=True, samesite="Lax")
-        return response
-
-    return middleware
 
 
 async def _health(_request: web.Request) -> web.Response:

@@ -14,6 +14,7 @@ class TraderConfig:
     timezone: str = "Europe/Moscow"
     shotcore_url: str = "http://127.0.0.1:4861"
     shotcore_token: str = ""
+    web_token: str = ""
     lookback_min: int = 180
     poll_sec: int = 60
     run_hours: float = 3.0
@@ -71,6 +72,7 @@ def load_trader_config(root: Path | None = None) -> TraderConfig:
         timezone=os.getenv("TZ", "Europe/Moscow").strip() or "Europe/Moscow",
         shotcore_url=(os.getenv("SHOTCORE_URL") or "http://127.0.0.1:4861").rstrip("/"),
         shotcore_token=os.getenv("SHOTCORE_TOKEN", "").strip(),
+        web_token=(os.getenv("WEB_TOKEN") or os.getenv("TRADER_TOKEN") or "").strip(),
         lookback_min=_i("LOOKBACK_MIN", 180),
         poll_sec=max(15, _i("TRADER_POLL_SEC", 60)),
         run_hours=max(0.1, _f("MT_RUN_HOURS", 3.0)),

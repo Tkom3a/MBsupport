@@ -29,6 +29,12 @@ python -m shottrader
 
 UI: `http://IP:4863/` · с дашборда ShotCore вкладка **ShotTrader**.
 
+## Авторизация
+
+Те же переменные, что у ShotCore (`AUTH_MODE`, `AUTH_USERS` / LDAP_* , `SESSION_SECRET`).
+При `AUTH_MODE=local` или `ldap` браузер открывает `/login`.
+Сервисный доступ к API: `WEB_TOKEN` / `X-Shot-Token`.
+
 Через Docker из корня репозитория (сервис `shottrader` в compose):
 
 ```bash

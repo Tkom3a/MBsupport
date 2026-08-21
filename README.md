@@ -173,7 +173,11 @@ sudo systemctl restart shotcore    # если стоит unit
 | Переменная | Зачем |
 |---|---|
 | `WEB_HOST` / `WEB_PORT` | Адрес страницы. Снаружи удобно `0.0.0.0` и `4861` |
-| `WEB_TOKEN` | Если задать — вход только с `http://IP:4861/?token=СЕКРЕТ` |
+| `WEB_TOKEN` | Machine-доступ API: `?token=` / `X-Shot-Token` (и для ShotTrader↔ShotCore) |
+| `AUTH_MODE` | `off` / `local` / `ldap` — логин в UI |
+| `AUTH_USERS` | При `local`: `user:pass,user2:pass2` |
+| `SESSION_SECRET` | Подпись cookie-сессии (желательно задать) |
+| `LDAP_URL` | При `ldap`: `ldap://dc:389` или `ldaps://dc:636` |
 | `TZ` | Часовой пояс ленты, например `Europe/Moscow` |
 | `STATS_LOOKBACK_MIN` | Окно статистики на странице, минуты. `0` = вся история |
 | `SHOT_WINDOWS_MS` | Окна детекции, мс, через запятую |
@@ -262,7 +266,11 @@ python -m shottrader
 **После `git pull` старое поведение**  
 Не забыли `--build`: без него Compose может поднять старый образ.
 
-**401 Need WEB_TOKEN**  
+**401 / страница входа**  
+Включён `AUTH_MODE=local|ldap` — войдите через `/login`.  
+Или задан только `WEB_TOKEN` — откройте `http://IP:4861/?token=значение_из_env`.
+
+**401 Need WEB_TOKEN** (старый режим без AUTH_MODE)  
 Задан `WEB_TOKEN`. Открой `http://IP:4861/?token=значение_из_env`.
 
 ---
