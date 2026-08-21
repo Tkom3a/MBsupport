@@ -610,6 +610,36 @@ class ShotEngine:
             total += _pnl_usd(algo.pos_side, algo.entry, last, algo.size_usdt)
         return round(total, 4)
 
+    @staticmethod
+    def _side_margin(algo: Algo) -> float:
+        lever = max(int(algo.lever or 1), 1)
+        return float(algo.size_usdt or 0) / lever
+
+    def _frozen_budget(self, algos: list[Algo] | None = None) -> dict[str, Any]:
+        """Сколько USDT без плеча нужно на бирже под все текущие ордера/позиции."""
+        pairs = 0
+        sides = 0
+        margin = 0.0
+        notional = 0.0
+        for algo in algos if algos is not None else self.algos.values():
+            one = self._side_margin(algo)
+            if algo.state == "pos":
+                n = 1
+            else:
+                n = int(algo.buy_distance > 0) + int(algo.sell_distance > 0)
+            if n <= 0:
+                continue
+            pairs += 1
+            sides += n
+            margin += one * n
+            notional += float(algo.size_usdt or 0) * n
+        return {
+            "pairs": pairs,
+            "sides": sides,
+            "margin_usdt": round(margin, 4),
+            "notional_usdt": round(notional, 4),
+        }
+
     def snapshot(self) -> dict[str, Any]:
         self.roll_calendar_day()
         hour = self.window_stats(1)
@@ -628,6 +658,8 @@ class ShotEngine:
                 if last > 0:
                     u_pnl = _pnl_usd(a.pos_side, a.entry, last, a.size_usdt)
             sc = self.symbol_today(a.symbol)
+            margin = self._side_margin(a)
+            frozen_sides = 1 if a.state == "pos" else int(a.buy_distance > 0) + int(a.sell_distance > 0)
             markets.append(
                 {
                     "symbol": a.symbol,
@@ -640,6 +672,9 @@ class ShotEngine:
                     "sell_tp": a.sell_tp,
                     "lever": a.lever,
                     "size_usdt": a.size_usdt,
+                    "margin_usdt": round(margin, 4),
+                    "frozen_sides": frozen_sides,
+                    "frozen_margin_usdt": round(margin * frozen_sides, 4),
                     "in_trade": round(in_trade, 4),
                     "wins": sc["plus"],
                     "losses": sc["minus"],
@@ -657,6 +692,7 @@ class ShotEngine:
             )
         markets.sort(key=lambda row: row["symbol"])
         in_trade_total = round(sum(float(r.get("in_trade") or 0) for r in markets), 4)
+        budget = self._frozen_budget(list(self.algos.values()))
         return {
             "emulate": self.emulate,
             "live": (not self.emulate) and bool(self.broker and self.broker.ready),
@@ -670,6 +706,10 @@ class ShotEngine:
             "run_hours": self.cfg.run_hours,
             "unrealized": self.unrealized(),
             "in_trade": in_trade_total,
+            "frozen_margin_usdt": budget["margin_usdt"],
+            "frozen_notional_usdt": budget["notional_usdt"],
+            "frozen_pairs": budget["pairs"],
+            "frozen_sides": budget["sides"],
             "hour": hour,
             "day": day,
             "today": today,

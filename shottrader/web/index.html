@@ -86,7 +86,14 @@
     .board-wrap { flex: 1; min-height: 0; overflow: auto; }
     table { width: 100%; border-collapse: collapse; font-size: 12px; }
     th, td { padding: 7px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
-    th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: #0e1218; z-index: 1; }
+    th { color: var(--muted); font-weight: 600; position: sticky; top: 40px; background: #0e1218; z-index: 1; }
+    thead tr.budget th {
+      top: 0; z-index: 3; text-align: left; white-space: normal;
+      background: #161c14; color: var(--text); font-weight: 500;
+      border-bottom: 1px solid #3a4a22; padding: 8px 10px;
+    }
+    thead tr.budget b { color: var(--amber); font-size: 14px; font-variant-numeric: tabular-nums; }
+    thead tr.budget .hint { color: var(--muted); font-weight: 400; margin-left: 10px; }
     td:first-child, th:first-child { text-align: left; }
     tbody tr:hover { background: #151b26; }
     tbody tr.sel { background: #1c2430; }
@@ -153,6 +160,9 @@
         <div class="board-wrap">
           <table>
             <thead>
+              <tr class="budget">
+                <th colspan="13" id="budgetRow">Без плеча заморожено: 0.00 USDT</th>
+              </tr>
               <tr>
                 <th>Пара</th>
                 <th>Цена</th>
@@ -346,6 +356,14 @@
       document.getElementById("unreal").textContent = money(state.unrealized);
       document.getElementById("unreal").className = "v " + (state.unrealized >= 0 ? "up" : "down");
       document.getElementById("inTrade").textContent = fmt(state.in_trade || 0) + "$";
+      const frozen = Number(state.frozen_margin_usdt || 0);
+      const sides = Number(state.frozen_sides || 0);
+      const pairs = Number(state.frozen_pairs || 0);
+      const notion = Number(state.frozen_notional_usdt || 0);
+      document.getElementById("budgetRow").innerHTML =
+        `Без плеча заморожено: <b>${fmt(frozen)} USDT</b>`
+        + `<span class="hint">столько нужно на бирже под все ордера · ${pairs} пар · ${sides} сторон`
+        + ` · номинал с плечом ${fmt(notion)}$</span>`;
       document.getElementById("hour").textContent = `${state.hour.trades} (+${state.hour.plus || 0}/−${state.hour.minus || 0}) / ${money(state.hour.pnl_usd)}`;
       const td = state.today || state.day || {};
       document.getElementById("day").textContent = `${td.trades || 0} (+${td.plus || 0}/−${td.minus || 0}) / ${money(td.pnl_usd)}`;
