@@ -187,7 +187,7 @@
         </table>
         <h2 style="margin-top:12px">Сделки</h2>
         <table>
-          <thead><tr><th>Пара</th><th>Стор.</th><th>PnL</th></tr></thead>
+          <thead><tr><th>Время</th><th>Пара</th><th>Стор.</th><th>PnL</th></tr></thead>
           <tbody id="journal"></tbody>
         </table>
       </aside>
@@ -241,6 +241,13 @@
     function money(n) {
       const v = Number(n || 0);
       return (v >= 0 ? "+" : "") + fmt(v) + "$";
+    }
+    function tradeTime(ts) {
+      const n = Number(ts || 0);
+      if (!n) return "—";
+      const d = new Date(n);
+      const pad = (x) => String(x).padStart(2, "0");
+      return `${pad(d.getDate())}.${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
     }
     function distCell(v) {
       if (v == null || Number.isNaN(Number(v))) return `<td class="muted">—</td>`;
@@ -400,9 +407,9 @@
         <td>${fmt(p.win_prob || 0, 0)}%</td></tr>`).join("")
         || `<tr><td colspan="4" class="muted">пустой план</td></tr>`;
       document.getElementById("journal").innerHTML = [...(state.journal || [])].reverse().slice(0, 25).map((j) => `
-        <tr><td>${(j.symbol || "").split("-")[0]}</td><td>${j.side}</td>
+        <tr><td class="muted">${tradeTime(j.ts)}</td><td>${(j.symbol || "").split("-")[0]}</td><td>${j.side || ""}</td>
         <td class="${j.pnl_usd >= 0 ? "up" : "down"}">${money(j.pnl_usd)}</td></tr>`).join("")
-        || `<tr><td colspan="3" class="muted">пока пусто</td></tr>`;
+        || `<tr><td colspan="4" class="muted">пока пусто</td></tr>`;
       document.getElementById("log").innerHTML = [...(state.log || [])].reverse().map((l) => `<div>${l}</div>`).join("");
       renderReports(state.reports);
     }
