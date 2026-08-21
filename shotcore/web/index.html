@@ -126,7 +126,6 @@
   <header>
     <div>
       <h1>Shot<span>Core</span> — разведка дистанций</h1>
-      <div class="meta" id="subtitle">Разведка за 3 часа: D на 0.05–0.10% внутрь края прострела · TP или выход через 0.3 с · рекомендация только при плюсе ≥ 70%</div>
     </div>
     <div class="live"><span class="dot"></span><span id="live">ожидание данных</span></div>
   </header>
@@ -159,7 +158,6 @@
       <option value="DOWN">BUY / DOWN</option>
       <option value="UP">SELL / UP</option>
     </select>
-    <label class="chip"><input type="checkbox" id="btcCalm" /> только спокойный BTC</label>
     <input id="search" placeholder="поиск пары, например SOL" />
   </div>
   <div class="chips" id="chips"></div>
@@ -252,7 +250,6 @@
     const token = qs.get("token");
     const lookbackEl = document.getElementById("lookback");
     const directionEl = document.getElementById("direction");
-    const btcCalmEl = document.getElementById("btcCalm");
     const searchEl = document.getElementById("search");
     const feedSearchEl = document.getElementById("feedSearch");
     const leverFilterEl = document.getElementById("leverFilter");
@@ -335,9 +332,8 @@
     async function tick() {
       const lookback = lookbackEl.value;
       const direction = directionEl.value;
-      const btcCalm = btcCalmEl.checked ? "1" : "0";
       localStorage.setItem("shotcore_lookback", lookback);
-      const q = `lookback=${lookback}&direction=${direction}&btc_calm=${btcCalm}`;
+      const q = `lookback=${lookback}&direction=${direction}`;
       const [stats, shots] = await Promise.all([
         api("/api/stats?" + q),
         api("/api/shots?" + q + "&limit=60"),
@@ -356,8 +352,6 @@
       }
       document.getElementById("live").textContent =
         `${stats.symbols_watched || 0} в подписке · тик ${((f.shot_windows_ms || [500,700])[0] || 500)} мс`;
-      document.getElementById("subtitle").textContent =
-        `${f.inst_type} ${f.quote} · D на ${(f.suggest_inside_pct ?? 0.05)}–${(f.suggest_inside_max_pct ?? 0.10)}% внутрь края · плюс ≥ ${f.min_win_pct ?? 70}%`;
       document.getElementById("kpiPairs").textContent = stats.pairs ?? 0;
       document.getElementById("kpiShots").textContent = stats.shots ?? 0;
       document.getElementById("kpiActive").textContent = activeN;
@@ -385,7 +379,6 @@
         ["Hold", (f.hold_ms || 300) + " мс"],
         ["Внутрь края", `${f.suggest_inside_pct ?? 0.05}–${f.suggest_inside_max_pct ?? 0.10}%`],
         ["Плюс ≥", (f.min_win_pct ?? 70) + "%"],
-        ["Distance", (f.distance_levels || []).join(" / ")],
         ["BTC ±", `${f.btc_range_pct}% / ${f.btc_window_sec}с`],
       ].map(([k, v]) => `<span class="chip">${k}: <b>${v}</b></span>`).join("");
 
@@ -452,7 +445,6 @@
     ["change"].forEach(ev => {
       lookbackEl.addEventListener(ev, () => tick().catch(console.error));
       directionEl.addEventListener(ev, () => tick().catch(console.error));
-      btcCalmEl.addEventListener(ev, () => tick().catch(console.error));
     });
     searchEl.addEventListener("input", () => renderTable());
     feedSearchEl.addEventListener("input", () => renderFeed());
