@@ -141,7 +141,7 @@ class ShotEngine:
         self.tapes: dict[str, Tape] = defaultdict(Tape)
         self.algos: dict[str, Algo] = {}
         self.log_lines: deque[str] = deque(maxlen=200)
-        self.journal: deque[dict[str, Any]] = deque(maxlen=400)
+        self.journal: deque[dict[str, Any]] = deque(maxlen=2000)
         self._journal_all: list[dict[str, Any]] = []
         self.days: dict[str, dict[str, Any]] = {}
         self.today_key = _local_date(_now_ms(), self.tz)
@@ -171,7 +171,7 @@ class ShotEngine:
             return
         try:
             lines = self.journal_path.read_text(encoding="utf-8").splitlines()
-            for line in lines[-400:]:
+            for line in lines[-2000:]:
                 if line.strip():
                     self.journal.append(json.loads(line))
             self._journal_all = []
@@ -532,6 +532,7 @@ class ShotEngine:
             "distance": algo.buy_distance if algo.pos_side == "buy" else algo.sell_distance,
             "tp": algo.buy_tp if algo.pos_side == "buy" else algo.sell_tp,
             "size_usdt": algo.size_usdt,
+            "lever": int(algo.lever or 0),
             "emulate": self.emulate,
         }
         self._write_trade(row)
@@ -594,6 +595,25 @@ class ShotEngine:
             algo.buy_px = 0.0
             algo.sell_px = 0.0
             algo.qty = "1"
+
+    def day_trades(self) -> list[dict[str, Any]]:
+        """Сделки текущих суток (по TZ) — для окна журнала."""
+        self.roll_calendar_day()
+        key = self.today_key
+        rows: list[dict[str, Any]] = []
+        for row in getattr(self, "_journal_all", list(self.journal)):
+            ts = int(row.get("ts") or 0)
+            if ts <= 0:
+                continue
+            if _local_date(ts, self.tz) != key:
+                continue
+            item = dict(row)
+            if not int(item.get("lever") or 0):
+                algo = self.algos.get(str(item.get("symbol") or "").upper())
+                if algo and algo.lever:
+                    item["lever"] = int(algo.lever)
+            rows.append(item)
+        return rows
 
     def window_stats(self, hours: float) -> dict[str, Any]:
         cutoff = _now_ms() - int(hours * 3600 * 1000)
@@ -731,6 +751,6 @@ class ShotEngine:
             "plan_updated_ts": self.plan_updated_ts,
             "shotcore_url": self.cfg.shotcore_url,
             "algos": markets,
-            "journal": list(self.journal)[-40:],
+            "journal": self.day_trades(),
             "log": list(self.log_lines)[-60:],
         }

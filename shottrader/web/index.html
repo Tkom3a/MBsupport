@@ -43,12 +43,12 @@
     .badge.live { color: var(--down); border-color: #7a2f38; }
     .badge.emu { color: var(--up); border-color: #2d6b4f; }
     .badge.halt { color: #fff; background: #7a2f38; border-color: #7a2f38; }
-    .top .grow { flex: 1; }
+    .top .grow, .grow { flex: 1; }
     .main { display: grid; grid-template-columns: 220px 1fr 360px; min-height: 0; }
     .side, .right { background: var(--panel); border-right: 1px solid var(--line); overflow: auto; padding: 10px; }
     .right {
       border-right: 0; border-left: 1px solid var(--line);
-      display: grid; grid-template-rows: minmax(120px, 0.9fr) minmax(160px, 1.15fr) minmax(140px, 1fr);
+      display: grid; grid-template-rows: minmax(140px, 1fr) minmax(180px, 1.2fr);
       overflow: hidden; padding: 0; min-height: 0;
     }
     .right .pane {
@@ -88,12 +88,21 @@
     .kpi .v { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
     .kpi .l { color: var(--muted); font-size: 11px; }
     .center { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #0b0e13; }
-    .board-head {
+    .board-head, .deals-head {
       display: flex; align-items: center; gap: 10px; padding: 8px 12px;
       border-bottom: 1px solid var(--line); background: #0e1218;
     }
-    .board-head b { font-size: 14px; }
-    .board-wrap { flex: 1; min-height: 0; overflow: auto; }
+    .board-head b, .deals-head b { font-size: 14px; }
+    .board-wrap { flex: 0 1 38%; min-height: 120px; max-height: 46%; overflow: auto; }
+    .deals-panel {
+      flex: 1; min-height: 180px; display: flex; flex-direction: column;
+      border-top: 1px solid var(--line); background: #0b0e13;
+    }
+    .deals-head input {
+      width: 200px; max-width: 36%; flex: 0 0 auto; margin: 0;
+    }
+    .deals-wrap { flex: 1; min-height: 0; overflow: auto; }
+    .deals-wrap th { position: sticky; top: 0; z-index: 1; }
     table { width: 100%; border-collapse: collapse; font-size: 12px; }
     th, td { padding: 7px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
     th { color: var(--muted); font-weight: 600; background: #0e1218; }
@@ -196,6 +205,30 @@
             <tbody id="markets"><tr><td colspan="13" class="muted">ожидание клонов</td></tr></tbody>
           </table>
         </div>
+        <div class="deals-panel">
+          <div class="deals-head">
+            <b>Сделки за сутки</b>
+            <span class="muted" id="dealsMeta">0 сделок</span>
+            <div class="grow"></div>
+            <input id="dealsFilter" type="search" placeholder="фильтр пары: CORE, ENA…" autocomplete="off" />
+          </div>
+          <div class="deals-wrap" id="dealsWrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Время</th>
+                  <th>Пара</th>
+                  <th>Стор.</th>
+                  <th>D</th>
+                  <th>Плечо</th>
+                  <th>Ордер</th>
+                  <th>PnL</th>
+                </tr>
+              </thead>
+              <tbody id="dealsBody"><tr><td colspan="7" class="muted">нет сделок за сутки</td></tr></tbody>
+            </table>
+          </div>
+        </div>
       </section>
       <aside class="right">
         <div class="pane">
@@ -215,13 +248,6 @@
           <table>
             <thead><tr><th>Пара</th><th>+ / −</th><th>PnL</th></tr></thead>
             <tbody id="reportSym"><tr><td colspan="3" class="muted">нет сделок</td></tr></tbody>
-          </table>
-        </div>
-        <div class="pane">
-          <h2>Сделки</h2>
-          <table>
-            <thead><tr><th>Время</th><th>Пара</th><th>Стор.</th><th>D</th><th>PnL</th></tr></thead>
-            <tbody id="journal"></tbody>
           </table>
         </div>
       </aside>
@@ -445,13 +471,54 @@
         <td class="down">${Number(p.sell_pct) > 0 ? fmt(p.sell_pct) : (Number(p.recommend_pct) > 0 && !p.buy_pct ? fmt(p.recommend_pct) : "—")}</td>
         <td>${fmt(p.win_prob || 0, 0)}%</td></tr>`).join("")
         || `<tr><td colspan="4" class="muted">пустой план</td></tr>`;
-      document.getElementById("journal").innerHTML = [...(state.journal || [])].reverse().slice(0, 25).map((j) => `
-        <tr><td class="muted">${tradeTime(j.ts)}</td><td>${(j.symbol || "").split("-")[0]}</td><td>${j.side || ""}</td>
-        <td class="amber">${Number(j.distance) > 0 ? fmt(j.distance) + "%" : "—"}</td>
-        <td class="${j.pnl_usd >= 0 ? "up" : "down"}">${money(j.pnl_usd)}</td></tr>`).join("")
-        || `<tr><td colspan="5" class="muted">пока пусто</td></tr>`;
+      renderDeals();
       document.getElementById("log").innerHTML = [...(state.log || [])].reverse().map((l) => `<div>${l}</div>`).join("");
       renderReports(state.reports);
+    }
+
+    let lastDealsSig = "";
+    function renderDeals() {
+      const all = [...(state.journal || [])];
+      const q = (document.getElementById("dealsFilter").value || "").trim().toLowerCase();
+      const rows = q
+        ? all.filter((j) => {
+            const sym = String(j.symbol || "").toLowerCase();
+            const base = sym.split("-")[0];
+            return sym.includes(q) || base.includes(q);
+          })
+        : all;
+      const last = all.length ? all[all.length - 1] : {};
+      const sig = `${q}|${all.length}|${last.ts || 0}|${last.pnl_usd || 0}`;
+      if (sig === lastDealsSig) return;
+      lastDealsSig = sig;
+      const wrap = document.getElementById("dealsWrap");
+      const y = wrap ? wrap.scrollTop : 0;
+      const pnl = rows.reduce((s, j) => s + Number(j.pnl_usd || 0), 0);
+      const plus = rows.filter((j) => Number(j.pnl_usd) > 0).length;
+      const shown = q ? `${rows.length} из ${all.length}` : String(all.length);
+      document.getElementById("dealsMeta").textContent =
+        `${shown} сделок · ${plus}/${rows.length - plus} · ${money(pnl)}`;
+      const body = document.getElementById("dealsBody");
+      if (!rows.length) {
+        body.innerHTML = `<tr><td colspan="7" class="muted">${q ? "нет сделок по фильтру" : "нет сделок за сутки"}</td></tr>`;
+      } else {
+        body.innerHTML = [...rows].reverse().map((j) => {
+          const side = String(j.side || "").toLowerCase();
+          const sideCls = side === "buy" ? "up" : (side === "sell" ? "down" : "");
+          const lever = Number(j.lever || 0);
+          const size = Number(j.size_usdt || 0);
+          return `<tr>
+            <td class="muted">${tradeTime(j.ts)}</td>
+            <td>${(j.symbol || "").split("-")[0]}</td>
+            <td class="${sideCls}">${(j.side || "").toUpperCase() || "—"}</td>
+            <td class="amber">${Number(j.distance) > 0 ? fmt(j.distance) + "%" : "—"}</td>
+            <td class="amber">${lever > 0 ? "x" + lever : "—"}</td>
+            <td>${size > 0 ? fmt(size) + "$" : "—"}</td>
+            <td class="${Number(j.pnl_usd) >= 0 ? "up" : "down"}">${money(j.pnl_usd)}</td>
+          </tr>`;
+        }).join("");
+      }
+      if (wrap) wrap.scrollTop = y;
     }
 
     function renderReports(rep) {
@@ -513,6 +580,10 @@
       });
     });
     document.getElementById("saveBtn").onclick = () => saveSettings();
+    document.getElementById("dealsFilter").addEventListener("input", () => {
+      lastDealsSig = "";
+      if (state) renderDeals();
+    });
     document.getElementById("reportDay").onchange = () => { if (state) renderReports(state.reports); };
     document.getElementById("panicBtn").onclick = () => api("/api/panic", { method: "POST", body: "{}" }).then(tick);
     document.getElementById("resumeBtn").onclick = () => api("/api/resume", { method: "POST", body: "{}" }).then(tick);
