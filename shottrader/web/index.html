@@ -184,7 +184,7 @@
           <table>
             <thead>
               <tr class="budget">
-                <th colspan="13" id="budgetRow">Без плеча заморожено: 0.00 USDT</th>
+                <th colspan="15" id="budgetRow">Без плеча заморожено: 0.00 USDT</th>
               </tr>
               <tr>
                 <th>Пара</th>
@@ -192,9 +192,11 @@
                 <th>BUY</th>
                 <th>до BUY</th>
                 <th>D BUY</th>
+                <th>TP BUY</th>
                 <th>SELL</th>
                 <th>до SELL</th>
                 <th>D SHORT</th>
+                <th>TP SHORT</th>
                 <th>Сумма</th>
                 <th>+ / −</th>
                 <th>Сост.</th>
@@ -202,7 +204,7 @@
                 <th>мин</th>
               </tr>
             </thead>
-            <tbody id="markets"><tr><td colspan="13" class="muted">ожидание клонов</td></tr></tbody>
+            <tbody id="markets"><tr><td colspan="15" class="muted">ожидание клонов</td></tr></tbody>
           </table>
         </div>
         <div class="deals-panel">
@@ -425,8 +427,8 @@
       const body = document.getElementById("markets");
       if (!rows.length) {
         body.innerHTML = state.plan_error
-          ? `<tr><td colspan="13" class="muted">нет клонов — ShotCore недоступен: ${state.plan_error}</td></tr>`
-          : `<tr><td colspan="13" class="muted">ожидание клонов из плана ShotCore</td></tr>`;
+          ? `<tr><td colspan="15" class="muted">нет клонов — ShotCore недоступен: ${state.plan_error}</td></tr>`
+          : `<tr><td colspan="15" class="muted">ожидание клонов из плана ShotCore</td></tr>`;
       } else {
         body.innerHTML = rows.map((x) => {
           const sel = x.symbol === state.view ? "sel" : "";
@@ -441,6 +443,8 @@
             : `<span class="muted">${fmt(x.size_usdt)} $</span>`;
           const dBuy = Number(x.buy_distance) > 0 ? fmt(x.buy_distance) : "—";
           const dSell = Number(x.sell_distance) > 0 ? fmt(x.sell_distance) : "—";
+          const tpBuy = Number(x.buy_tp) > 0 ? fmt(x.buy_tp) : "—";
+          const tpSell = Number(x.sell_tp) > 0 ? fmt(x.sell_tp) : "—";
           const wl = `<span class="up">${x.wins || 0}</span>/<span class="down">${x.losses || 0}</span>`;
           return `<tr class="${sel}" data-sym="${x.symbol}">
             <td>${x.symbol.replace("-USDT-SWAP","")} <span class="muted">x${x.lever || "—"}</span></td>
@@ -448,9 +452,11 @@
             <td class="up">${px(x.buy)}</td>
             ${distCell(x.buy_dist_pct)}
             <td class="up">${dBuy}</td>
+            <td class="up">${tpBuy}</td>
             <td class="down">${px(x.sell)}</td>
             ${distCell(x.sell_dist_pct)}
             <td class="down">${dSell}</td>
+            <td class="down">${tpSell}</td>
             <td>${sum}</td>
             <td>${wl}</td>
             <td>${st}</td>
