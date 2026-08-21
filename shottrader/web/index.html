@@ -143,10 +143,10 @@
     <div class="main">
       <aside class="side">
         <h2>Управление</h2>
-        <label>Order size (USDT с плечом)</label>
-        <input id="orderSize" type="number" step="1" min="1" value="10" />
-        <label>Плечо</label>
-        <input id="leverage" type="number" step="1" min="1" value="50" />
+        <label>Order size x20 (USDT с плечом)</label>
+        <input id="orderSize20" type="number" step="1" min="1" value="10" />
+        <label>Order size x50 (USDT с плечом)</label>
+        <input id="orderSize50" type="number" step="1" min="1" value="10" />
         <label>Авто-стоп, $</label>
         <input id="autostop" type="number" step="0.5" min="0.5" value="10" />
         <div class="row2" style="margin-top:10px">
@@ -290,7 +290,7 @@
       return `<td class="${cls}">${fmt(n, 3)}%</td>`;
     }
 
-    const settingsDirty = { orderSize: false, leverage: false, autostop: false };
+    const settingsDirty = { orderSize20: false, orderSize50: false, autostop: false };
     let settingsLocked = false;
     let settingsBusy = false;
     let settingsHydrated = false;
@@ -305,23 +305,23 @@
 
     function readSettings() {
       return {
-        order_size: Number(document.getElementById("orderSize").value),
-        leverage: Number(document.getElementById("leverage").value),
+        order_size_x20: Number(document.getElementById("orderSize20").value),
+        order_size_x50: Number(document.getElementById("orderSize50").value),
         autostop_usd: Number(document.getElementById("autostop").value),
       };
     }
 
     function fillSettings(data) {
       if (!data) return;
-      if (data.order_size != null) document.getElementById("orderSize").value = data.order_size;
-      if (data.leverage != null) document.getElementById("leverage").value = data.leverage;
+      if (data.order_size_x20 != null) document.getElementById("orderSize20").value = data.order_size_x20;
+      if (data.order_size_x50 != null) document.getElementById("orderSize50").value = data.order_size_x50;
       if (data.autostop_usd != null) document.getElementById("autostop").value = data.autostop_usd;
-      settingsDirty.orderSize = false;
-      settingsDirty.leverage = false;
+      settingsDirty.orderSize20 = false;
+      settingsDirty.orderSize50 = false;
       settingsDirty.autostop = false;
       if (state) {
-        if (data.order_size != null) state.order_size = data.order_size;
-        if (data.leverage != null) state.leverage = data.leverage;
+        if (data.order_size_x20 != null) state.order_size_x20 = data.order_size_x20;
+        if (data.order_size_x50 != null) state.order_size_x50 = data.order_size_x50;
         if (data.autostop_usd != null) state.autostop_usd = data.autostop_usd;
       }
     }
@@ -329,12 +329,12 @@
     async function saveSettings() {
       if (settingsBusy) return;
       const payload = readSettings();
-      if (!Number.isFinite(payload.order_size) || payload.order_size < 1) {
-        alert("Order size должен быть ≥ 1");
+      if (!Number.isFinite(payload.order_size_x20) || payload.order_size_x20 < 1) {
+        alert("Order size x20 должен быть ≥ 1");
         return;
       }
-      if (!Number.isFinite(payload.leverage) || payload.leverage < 1) {
-        alert("Плечо должно быть ≥ 1");
+      if (!Number.isFinite(payload.order_size_x50) || payload.order_size_x50 < 1) {
+        alert("Order size x50 должен быть ≥ 1");
         return;
       }
       if (!Number.isFinite(payload.autostop_usd) || payload.autostop_usd < 0.5) {
@@ -369,8 +369,8 @@
       const halt = document.getElementById("haltBadge");
       halt.style.display = state.halted ? "inline-flex" : "none";
       if (state.halted) halt.textContent = "АВТО-СТОП: " + (state.halt_reason || "");
-      syncInput("orderSize", state.order_size);
-      syncInput("leverage", state.leverage);
+      syncInput("orderSize20", state.order_size_x20);
+      syncInput("orderSize50", state.order_size_x50);
       syncInput("autostop", state.autostop_usd);
       settingsHydrated = true;
       document.getElementById("unreal").textContent = money(state.unrealized);
@@ -416,7 +416,7 @@
           const dSell = Number(x.sell_distance) > 0 ? fmt(x.sell_distance) : "—";
           const wl = `<span class="up">${x.wins || 0}</span>/<span class="down">${x.losses || 0}</span>`;
           return `<tr class="${sel}" data-sym="${x.symbol}">
-            <td>${x.symbol}</td>
+            <td>${x.symbol.replace("-USDT-SWAP","")} <span class="muted">x${x.lever || "—"}</span></td>
             <td class="amber">${px(x.last)}</td>
             <td class="up">${px(x.buy)}</td>
             ${distCell(x.buy_dist_pct)}
@@ -440,7 +440,7 @@
       }
 
       document.getElementById("plan").innerHTML = (state.plan || []).slice(0, 20).map((p) => `
-        <tr><td>${(p.symbol || "").split("-")[0]}</td>
+        <tr><td>${(p.symbol || "").split("-")[0]} <span class="muted">x${p.lever || "—"}</span></td>
         <td class="up">${Number(p.buy_pct) > 0 ? fmt(p.buy_pct) : "—"}</td>
         <td class="down">${Number(p.sell_pct) > 0 ? fmt(p.sell_pct) : (Number(p.recommend_pct) > 0 && !p.buy_pct ? fmt(p.recommend_pct) : "—")}</td>
         <td>${fmt(p.win_prob || 0, 0)}%</td></tr>`).join("")
@@ -495,14 +495,14 @@
 
     async function tick() {
       const next = await api("/api/state");
-      if (settingsDirty.orderSize) next.order_size = Number(document.getElementById("orderSize").value);
-      if (settingsDirty.leverage) next.leverage = Number(document.getElementById("leverage").value);
+      if (settingsDirty.orderSize20) next.order_size_x20 = Number(document.getElementById("orderSize20").value);
+      if (settingsDirty.orderSize50) next.order_size_x50 = Number(document.getElementById("orderSize50").value);
       if (settingsDirty.autostop) next.autostop_usd = Number(document.getElementById("autostop").value);
       state = next;
       render();
     }
 
-    ["orderSize", "leverage", "autostop"].forEach((id) => {
+    ["orderSize20", "orderSize50", "autostop"].forEach((id) => {
       const el = document.getElementById(id);
       el.addEventListener("input", () => { settingsDirty[id] = true; });
       el.addEventListener("keydown", (ev) => {

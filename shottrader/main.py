@@ -137,9 +137,19 @@ class ShotTrader:
         except Exception:
             return web.json_response({"ok": False, "error": "нужен JSON"}, status=400)
         try:
-            if "order_size" in body and body["order_size"] not in (None, ""):
-                self.engine.order_size = max(1.0, float(body["order_size"]))
-                self.cfg.order_size_usdt = self.engine.order_size
+            if "order_size_x20" in body and body["order_size_x20"] not in (None, ""):
+                self.engine.order_size_x20 = max(1.0, float(body["order_size_x20"]))
+                self.cfg.order_size_x20 = self.engine.order_size_x20
+            if "order_size_x50" in body and body["order_size_x50"] not in (None, ""):
+                self.engine.order_size_x50 = max(1.0, float(body["order_size_x50"]))
+                self.cfg.order_size_x50 = self.engine.order_size_x50
+            if "order_size" in body and body["order_size"] not in (None, "") and "order_size_x50" not in body:
+                val = max(1.0, float(body["order_size"]))
+                self.engine.order_size_x20 = val
+                self.engine.order_size_x50 = val
+                self.cfg.order_size_x20 = val
+                self.cfg.order_size_x50 = val
+            self.engine.order_size = self.engine.order_size_x50
             if "leverage" in body and body["leverage"] not in (None, ""):
                 self.engine.leverage = max(1, int(float(body["leverage"])))
                 self.cfg.leverage = self.engine.leverage
@@ -152,12 +162,15 @@ class ShotTrader:
             self._apply_shotcore_url(str(body.get("shotcore_url") or ""))
         self.engine.apply_runtime_settings()
         self.engine.note(
-            f"настройки: size={self.engine.order_size:g} x{self.engine.leverage} autostop={self.engine.autostop_usd:g}$"
+            f"настройки: x20={self.engine.order_size_x20:g} x50={self.engine.order_size_x50:g} "
+            f"autostop={self.engine.autostop_usd:g}$"
         )
         return web.json_response(
             {
                 "ok": True,
-                "order_size": self.engine.order_size,
+                "order_size": self.engine.order_size_x50,
+                "order_size_x20": self.engine.order_size_x20,
+                "order_size_x50": self.engine.order_size_x50,
                 "leverage": self.engine.leverage,
                 "autostop_usd": self.engine.autostop_usd,
             }

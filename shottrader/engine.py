@@ -146,7 +146,9 @@ class ShotEngine:
         self.days: dict[str, dict[str, Any]] = {}
         self.today_key = _local_date(_now_ms(), self.tz)
         self.emulate = cfg.emulate or not (broker and broker.ready and cfg.live_trading)
-        self.order_size = cfg.order_size_usdt
+        self.order_size_x20 = cfg.order_size_x20
+        self.order_size_x50 = cfg.order_size_x50
+        self.order_size = cfg.order_size_x50
         self.leverage = cfg.leverage
         self.autostop_usd = cfg.autostop_usd
         self.halted = False
@@ -358,10 +360,18 @@ class ShotEngine:
             self.view_symbol = next(iter(self.algos))
         return started
 
+    def size_for_lever(self, lever: int | float) -> float:
+        """Номинал с плечом: x20 и ближе → size x20, иначе size x50."""
+        lv = int(round(float(lever or 0))) or int(self.leverage or 50)
+        if abs(lv - 20) <= abs(lv - 50):
+            return float(self.order_size_x20)
+        return float(self.order_size_x50)
+
     def _start(self, pair: dict[str, Any]) -> None:
         symbol = str(pair.get("symbol") or "").upper()
         buy_d, buy_tp, sell_d, sell_tp = _sides_from_pair(pair)
         lever = int(pair.get("lever") or self.leverage) or self.leverage
+        size = self.size_for_lever(lever)
         now = _now_ms()
         dist = buy_d if buy_d > 0 else sell_d
         tp = buy_tp if buy_d > 0 else sell_tp
@@ -374,7 +384,7 @@ class ShotEngine:
             buy_tp=buy_tp,
             sell_tp=sell_tp,
             lever=lever,
-            size_usdt=self.order_size,
+            size_usdt=size,
             started_ts=now,
             until_ts=now + int(self.cfg.run_hours * 3600 * 1000),
             fingerprint=f"{buy_d}|{buy_tp}|{sell_d}|{sell_tp}",
@@ -386,7 +396,7 @@ class ShotEngine:
         if sell_d > 0:
             sides.append(f"SHORT D{sell_d}% TP{sell_tp}%")
         self.note(
-            f"старт {symbol} {' · '.join(sides) or 'нет сторон'} x{lever} size={self.order_size:g} "
+            f"старт {symbol} {' · '.join(sides) or 'нет сторон'} x{lever} size={size:g} "
             f"{'эмуляция' if self.emulate else 'LIVE'} на {self.cfg.run_hours:g}ч"
         )
 
@@ -565,13 +575,11 @@ class ShotEngine:
         self.note("авто-стоп снят, жду новые записи плана")
 
     def apply_runtime_settings(self) -> None:
-        """Протянуть order size / leverage с панели на активные клоны."""
+        """Протянуть размеры x20/x50 на активные клоны. Плечо пары не трогаем."""
         for algo in self.algos.values():
-            algo.size_usdt = self.order_size
-            algo.lever = self.leverage
             if algo.state != "hunt":
                 continue
-            # Переставить лимиты с новым размером на следующем follow
+            algo.size_usdt = self.size_for_lever(algo.lever)
             if not self.emulate and self.broker and self.broker.ready:
                 try:
                     loop = asyncio.get_running_loop()
@@ -698,7 +706,9 @@ class ShotEngine:
             "live": (not self.emulate) and bool(self.broker and self.broker.ready),
             "halted": self.halted,
             "halt_reason": self.halt_reason,
-            "order_size": self.order_size,
+            "order_size": self.order_size_x50,
+            "order_size_x20": self.order_size_x20,
+            "order_size_x50": self.order_size_x50,
             "leverage": self.leverage,
             "autostop_usd": self.autostop_usd,
             "follow_delay_ms": self.cfg.follow_delay_ms,

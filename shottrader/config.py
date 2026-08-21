@@ -21,6 +21,8 @@ class TraderConfig:
     hold_ms: int = 300
     follow_delay_ms: int = 1000
     order_size_usdt: float = 10.0
+    order_size_x20: float = 10.0
+    order_size_x50: float = 10.0
     leverage: int = 50
     autostop_usd: float = 10.0
     emulate: bool = True
@@ -85,6 +87,8 @@ def load_trader_config(root: Path | None = None) -> TraderConfig:
         hold_ms=max(50, _i("HOLD_MS", 300)),
         follow_delay_ms=max(200, _i("FOLLOW_DELAY_MS", 1000)),
         order_size_usdt=max(1.0, _f("MARGIN_USDT", 10.0)),
+        order_size_x20=max(1.0, _f("MARGIN_USDT_X20", _f("MARGIN_USDT", 10.0))),
+        order_size_x50=max(1.0, _f("MARGIN_USDT_X50", _f("MARGIN_USDT", 10.0))),
         leverage=max(1, _i("DEFAULT_LEVERAGE", 50)),
         autostop_usd=max(0.5, _f("AUTOSTOP_USD", 10.0)),
         emulate=emulate,
