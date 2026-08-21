@@ -188,12 +188,8 @@
   <script>
     let state = null;
     const qs = new URLSearchParams(location.search);
-    const coreUrl = qs.get("core") || `${location.protocol}//${location.hostname}:4861/`;
+    const coreUrl = (qs.get("core") || `${location.protocol}//${location.hostname}:4861/`).replace(/\/?$/, "/");
     document.getElementById("linkCore").href = coreUrl;
-    fetch("/api/auth/status").then((r) => r.json()).then((s) => {
-      const out = document.getElementById("linkLogout");
-      if (out && s.enabled) out.style.display = "";
-    }).catch(() => {});
 
     async function api(path, opts) {
       const res = await fetch(path, {
@@ -204,6 +200,17 @@
       if (!res.ok) throw new Error(res.statusText);
       return res.json();
     }
+
+    // Подтянуть URL ShotCore из вкладки (?core=) — иначе план идёт на 127.0.0.1 из .env
+    api("/api/shotcore", {
+      method: "POST",
+      body: JSON.stringify({ url: coreUrl.replace(/\/$/, "") }),
+    }).catch(() => {});
+
+    fetch("/api/auth/status").then((r) => r.json()).then((s) => {
+      const out = document.getElementById("linkLogout");
+      if (out && s.enabled) out.style.display = "";
+    }).catch(() => {});
 
     function fmt(n, d = 2) { return Number(n || 0).toFixed(d); }
     function px(n) {
@@ -239,8 +246,9 @@
       document.getElementById("unreal").className = "v " + (state.unrealized >= 0 ? "up" : "down");
       document.getElementById("hour").textContent = `${state.hour.trades} / ${money(state.hour.pnl_usd)}`;
       document.getElementById("day").textContent = `${state.day.trades} / ${money(state.day.pnl_usd)}`;
-      document.getElementById("planMeta").textContent =
-        `план: ${(state.plan || []).length} · клонов: ${(state.markets || state.algos || []).length}`;
+      document.getElementById("planMeta").textContent = state.plan_error
+        ? `ошибка плана: ${state.plan_error}`
+        : `план: ${(state.plan || []).length} · клонов: ${(state.markets || state.algos || []).length} · ${state.shotcore_url || ""}`;
       document.getElementById("boardMeta").textContent =
         `follow ${(state.follow_delay_ms || 1000) / 1000} с · hold ${(state.hold_ms || 300) / 1000} с`;
       document.getElementById("tickAge").textContent = new Date().toLocaleTimeString();
@@ -251,7 +259,9 @@
       const rows = state.markets || state.algos || [];
       const body = document.getElementById("markets");
       if (!rows.length) {
-        body.innerHTML = `<tr><td colspan="11" class="muted">ожидание клонов из плана ShotCore</td></tr>`;
+        body.innerHTML = state.plan_error
+          ? `<tr><td colspan="11" class="muted">нет клонов — ShotCore недоступен: ${state.plan_error}</td></tr>`
+          : `<tr><td colspan="11" class="muted">ожидание клонов из плана ShotCore</td></tr>`;
       } else {
         body.innerHTML = rows.map((x) => {
           const sel = x.symbol === state.view ? "sel" : "";

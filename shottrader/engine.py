@@ -95,6 +95,8 @@ class ShotEngine:
         self.halt_reason = ""
         self.view_symbol = ""
         self.plan_pairs: list[dict[str, Any]] = []
+        self.plan_error = ""
+        self.plan_updated_ts = 0
         self._load_journal()
 
     def note(self, text: str) -> None:
@@ -406,6 +408,9 @@ class ShotEngine:
             "view": view,
             "markets": markets,
             "plan": self.plan_pairs,
+            "plan_error": self.plan_error,
+            "plan_updated_ts": self.plan_updated_ts,
+            "shotcore_url": self.cfg.shotcore_url,
             "algos": markets,
             "journal": list(self.journal)[-40:],
             "log": list(self.log_lines)[-60:],

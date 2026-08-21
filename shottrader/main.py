@@ -5,6 +5,7 @@ import json
 import logging
 import signal
 import sys
+import time
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -13,12 +14,12 @@ from urllib.parse import urlencode
 import aiohttp
 from aiohttp import web
 
+from mbauth import load_auth_config
+from mbauth.web import attach_auth, make_middlewares
+
 from .config import TraderConfig, load_trader_config
 from .engine import ShotEngine
 from .okx_broker import OkxBroker
-
-from mbauth import load_auth_config
-from mbauth.web import attach_auth, make_middlewares
 
 log = logging.getLogger("shottrader")
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -78,6 +79,7 @@ class ShotTrader:
         app.router.add_get("/health", self._health)
         app.router.add_get("/api/state", self._state)
         app.router.add_post("/api/settings", self._settings)
+        app.router.add_post("/api/shotcore", self._set_shotcore)
         app.router.add_post("/api/view", self._view)
         app.router.add_post("/api/resume", self._resume)
         app.router.add_post("/api/panic", self._panic)
@@ -119,10 +121,30 @@ class ShotTrader:
         if "autostop_usd" in body:
             self.engine.autostop_usd = max(0.5, float(body["autostop_usd"]))
             self.cfg.autostop_usd = self.engine.autostop_usd
+        if "shotcore_url" in body:
+            self._apply_shotcore_url(str(body.get("shotcore_url") or ""))
         self.engine.note(
             f"настройки: size={self.engine.order_size:g} x{self.engine.leverage} autostop={self.engine.autostop_usd:g}$"
         )
         return web.json_response({"ok": True})
+
+    async def _set_shotcore(self, request: web.Request) -> web.Response:
+        body = await request.json()
+        url = self._apply_shotcore_url(str(body.get("url") or body.get("shotcore_url") or ""))
+        return web.json_response({"ok": True, "shotcore_url": url})
+
+    def _apply_shotcore_url(self, raw: str) -> str:
+        url = (raw or "").strip().rstrip("/")
+        if not url:
+            return self.cfg.shotcore_url
+        if not url.startswith("http://") and not url.startswith("https://"):
+            url = "http://" + url
+        prev = self.cfg.shotcore_url
+        self.cfg.shotcore_url = url
+        if url != prev:
+            self.engine.note(f"ShotCore URL → {url}")
+            self.engine.plan_error = ""
+        return url
 
     async def _view(self, request: web.Request) -> web.Response:
         body = await request.json()
@@ -141,24 +163,32 @@ class ShotTrader:
         return web.json_response({"ok": True})
 
     async def _plan_loop(self) -> None:
+        fail_sleep = 8
         while True:
             try:
                 plan = await self._fetch_plan()
-                pairs = [
-                    p
-                    for p in (plan.get("pairs") or [])
-                    if float(p.get("recommend_pct") or 0) > 0
-                    and float(p.get("win_prob") or 0) + 1e-9 >= 70
-                ]
+                raw = list(plan.get("pairs") or [])
+                # План уже отфильтрован ShotCore (D>0 и плюс ≥ min_win). Здесь только валидность.
+                pairs = [p for p in raw if float(p.get("recommend_pct") or 0) > 0]
                 started = self.engine.sync_plan(pairs)
+                self.engine.plan_error = ""
+                self.engine.plan_updated_ts = int(time.time() * 1000)
                 for sym in list(self.engine.algos) + [self.engine.view_symbol]:
                     if sym:
                         self._desired.add(sym.upper())
                 if started:
                     self.engine.note(f"новые клоны: {', '.join(started)}")
+                elif not pairs:
+                    self.engine.note(
+                        f"план ShotCore пуст ({self.cfg.shotcore_url}/api/mt-plan) — нет пар с D>0"
+                    )
+                fail_sleep = 8
+                await asyncio.sleep(self.cfg.poll_sec)
             except Exception as exc:
+                self.engine.plan_error = str(exc)
                 self.engine.note(f"план ShotCore: {exc}")
-            await asyncio.sleep(self.cfg.poll_sec)
+                await asyncio.sleep(fail_sleep)
+                fail_sleep = min(60, fail_sleep + 5)
 
     async def _fetch_plan(self) -> dict[str, Any]:
         assert self.session is not None
