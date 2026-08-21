@@ -239,7 +239,7 @@ cd shottrader
 cp .env.example .env
 # SHOTCORE_URL=http://IP-ShotCore:4861
 python -m shottrader
-# UI: http://IP:4862/
+# UI: http://IP:4863/
 ```
 
 Или из корня: `docker compose up -d --build shottrader`. По умолчанию **эмуляция**. LIVE — только с ключами OKX (`LIVE_TRADING=true`). Подробнее: [`shottrader/README.md`](shottrader/README.md).

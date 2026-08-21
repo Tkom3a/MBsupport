@@ -12,18 +12,27 @@
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.35 "Segoe UI", system-ui, sans-serif; }
-    .app { display: grid; grid-template-rows: 42px 1fr 28px; height: 100%; }
+    .app { display: grid; grid-template-rows: 52px 1fr 28px; height: 100%; }
     .top {
       display: flex; align-items: center; gap: 12px; padding: 0 12px;
       background: #0e1218; border-bottom: 1px solid var(--line);
     }
     .brand { font-weight: 700; letter-spacing: 0.04em; }
     .brand span { color: var(--amber); }
-    .nav a {
-      color: var(--muted); text-decoration: none; padding: 5px 10px; border-radius: 5px;
-      border: 1px solid transparent; font-size: 12px;
+    .nav {
+      display: flex; gap: 8px; align-items: center;
     }
-    .nav a.on { color: var(--text); border-color: var(--line); background: #1a2030; }
+    .nav a {
+      display: inline-flex; align-items: center; gap: 8px;
+      color: var(--muted); text-decoration: none; padding: 6px 12px; border-radius: 7px;
+      border: 1px solid var(--line); font-size: 12px; font-weight: 600; background: #10141c;
+    }
+    .nav a .nav-title { display: flex; flex-direction: column; line-height: 1.1; }
+    .nav a .nav-title small { font-size: 9px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    .nav a.on {
+      color: #e8c56a; border-color: #6a5420; background: linear-gradient(180deg, #2a2212, #1a160e);
+    }
+    .nav a.core:hover { color: var(--text); border-color: #3a4a66; }
     .nav a:hover { color: var(--text); }
     .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
     .badge.live { color: var(--down); border-color: #7a2f38; }
@@ -42,6 +51,23 @@
     button { cursor: pointer; }
     button.primary { background: #3a4a22; border-color: #5a7a32; }
     button.danger { background: #3a2226; border-color: #7a323c; }
+    button.log-toggle {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      width: 100%; margin-top: 14px; margin-bottom: 0; cursor: pointer;
+      background: transparent; border: 0; padding: 0; color: var(--muted);
+      font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
+      border-radius: 0;
+    }
+    button.log-toggle:hover { color: var(--text); }
+    button.log-toggle .arrow {
+      display: inline-block; transition: transform .15s ease; font-size: 12px; color: var(--amber);
+    }
+    button.log-toggle.open .arrow { transform: rotate(90deg); }
+    .log {
+      display: none; height: 180px; overflow: auto; background: #0b0e13; border: 1px solid var(--line);
+      border-radius: 6px; padding: 6px; margin-top: 8px; font: 11px/1.4 ui-monospace, Consolas, monospace;
+    }
+    .log.open { display: block; }
     .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
     .kpi { background: #0e1218; border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin-bottom: 6px; }
     .kpi .v { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -59,10 +85,6 @@
     td:first-child, th:first-child { text-align: left; }
     tbody tr:hover { background: #151b26; }
     tbody tr.sel { background: #1c2430; }
-    .log {
-      height: 180px; overflow: auto; background: #0b0e13; border: 1px solid var(--line);
-      border-radius: 6px; padding: 6px; font: 11px/1.4 ui-monospace, Consolas, monospace;
-    }
     .foot {
       display: flex; align-items: center; gap: 16px; padding: 0 12px;
       border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; background: #0e1218;
@@ -80,8 +102,12 @@
     <div class="top">
       <div class="brand">Shot<span>Trader</span></div>
       <nav class="nav">
-        <a id="linkCore" href="#">ShotCore</a>
-        <a class="on" href="/">ShotTrader</a>
+        <a class="core" id="linkCore" href="#">
+          <span class="nav-title">ShotCore<small>разведка</small></span>
+        </a>
+        <a class="on" href="/">
+          <span class="nav-title">ShotTrader<small>терминал · :4863</small></span>
+        </a>
       </nav>
       <span class="badge" id="modeBadge">эмуляция</span>
       <span class="badge" id="haltBadge" style="display:none">АВТО-СТОП</span>
@@ -106,7 +132,9 @@
         <div class="kpi"><div class="l">Нереализ.</div><div class="v" id="unreal">0.00$</div></div>
         <div class="kpi"><div class="l">1 час · сделки / PnL</div><div class="v" id="hour">0 / 0$</div></div>
         <div class="kpi"><div class="l">24 часа · сделки / PnL</div><div class="v" id="day">0 / 0$</div></div>
-        <h2 style="margin-top:14px">Лог</h2>
+        <button type="button" class="log-toggle" id="logToggle" aria-expanded="false">
+          <span>Логи</span><span class="arrow">▸</span>
+        </button>
         <div class="log" id="log"></div>
       </aside>
       <section class="center">
@@ -279,6 +307,14 @@
     };
     document.getElementById("panicBtn").onclick = () => api("/api/panic", { method: "POST", body: "{}" }).then(tick);
     document.getElementById("resumeBtn").onclick = () => api("/api/resume", { method: "POST", body: "{}" }).then(tick);
+    document.getElementById("logToggle").onclick = () => {
+      const btn = document.getElementById("logToggle");
+      const box = document.getElementById("log");
+      const open = !box.classList.contains("open");
+      box.classList.toggle("open", open);
+      btn.classList.toggle("open", open);
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+    };
     tick().catch((err) => { document.getElementById("log").textContent = "ошибка: " + err.message; });
     setInterval(() => tick().catch(console.error), 800);
   </script>

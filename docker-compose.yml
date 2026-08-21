@@ -30,14 +30,14 @@ services:
     env_file:
       - shottrader/.env
     ports:
-      - "${TRADER_PORT:-4862}:4862"
+      - "${TRADER_PORT:-4863}:4863"
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
     environment:
       TZ: ${TZ:-Europe/Moscow}
       TRADER_HOST: 0.0.0.0
-      TRADER_PORT: "4862"
+      TRADER_PORT: "4863"
       SHOTCORE_URL: ${SHOTCORE_URL:-http://shotcore:4861}
       EMULATE: ${EMULATE:-true}
       LIVE_TRADING: ${LIVE_TRADING:-false}
@@ -45,7 +45,7 @@ services:
       shotcore:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4862/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4863/health')"]
       interval: 20s
       timeout: 5s
       retries: 8

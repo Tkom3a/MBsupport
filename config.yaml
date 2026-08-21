@@ -77,5 +77,5 @@ web:
   port: 4861
   timezone: Europe/Moscow
   stats_lookback_min: 180
-  # Пусто = тот же хост, порт 4862. Или полный URL ShotTrader.
+  # Пусто = тот же хост, порт 4863. Или полный URL ShotTrader.
   shottrader_url: ""

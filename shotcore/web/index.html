@@ -28,14 +28,28 @@
       padding: 20px 24px 12px; border-bottom: 1px solid var(--line);
     }
     .nav {
-      display: flex; gap: 6px; padding: 10px 24px 0;
+      display: flex; gap: 8px; padding: 12px 24px 0; align-items: stretch;
     }
     .nav a {
-      color: var(--muted); text-decoration: none; padding: 7px 12px; border-radius: 6px;
-      border: 1px solid transparent; font-size: 13px;
+      display: inline-flex; align-items: center; gap: 8px;
+      color: var(--muted); text-decoration: none; padding: 10px 16px; border-radius: 8px;
+      border: 1px solid var(--line); font-size: 13px; font-weight: 600; background: #10141c;
+      letter-spacing: 0.02em; transition: color .15s, border-color .15s, background .15s;
     }
-    .nav a.on { color: var(--text); border-color: var(--line); background: var(--chip); }
-    .nav a:hover { color: var(--text); }
+    .nav a .nav-title { display: flex; flex-direction: column; line-height: 1.15; }
+    .nav a .nav-title small { font-size: 10px; font-weight: 500; color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; }
+    .nav a.on {
+      color: var(--text); border-color: #3d5a8a; background: linear-gradient(180deg, #1a2740, #141c2c);
+      box-shadow: inset 0 0 0 1px #2a3f66;
+    }
+    .nav a.trader {
+      color: #e8c56a; border-color: #6a5420; background: linear-gradient(180deg, #2a2212, #1a160e);
+    }
+    .nav a.trader:hover, .nav a.trader:focus {
+      color: #ffe08a; border-color: #d7a13b; background: linear-gradient(180deg, #3a2e14, #221c10);
+    }
+    .nav a.trader .nav-title small { color: #a88b3a; }
+    .nav a:hover { color: var(--text); border-color: #3a4a66; }
     h1 { margin: 0; font-size: 20px; letter-spacing: 0.04em; font-weight: 650; }
     h1 span { color: var(--amber); }
     h2 { margin: 0; font-size: 13px; color: var(--muted); font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
@@ -113,8 +127,12 @@
     <div class="live"><span class="dot"></span><span id="live">ожидание данных</span></div>
   </header>
   <nav class="nav">
-    <a class="on" href="/">ShotCore</a>
-    <a id="linkTrader" href="#">ShotTrader</a>
+    <a class="on" href="/">
+      <span class="nav-title">ShotCore<small>разведка</small></span>
+    </a>
+    <a class="trader" id="linkTrader" href="#">
+      <span class="nav-title">ShotTrader<small>терминал · :4863</small></span>
+    </a>
   </nav>
   <div class="kpis">
     <div class="kpi"><div class="lbl">Пары с прострелами</div><div class="val" id="kpiPairs">—</div></div>
@@ -233,7 +251,7 @@
     const leverFilterEl = document.getElementById("leverFilter");
     const traderLink = document.getElementById("linkTrader");
     if (traderLink) {
-      const url = new URL(`${location.protocol}//${location.hostname}:4862/`);
+      const url = new URL(`${location.protocol}//${location.hostname}:4863/`);
       if (token) url.searchParams.set("token", token);
       url.searchParams.set("core", location.origin + "/");
       traderLink.href = url.toString();
@@ -319,7 +337,7 @@
       const traderLink = document.getElementById("linkTrader");
       if (traderLink) {
         const raw = (f.shottrader_url || "").trim();
-        const base = raw || `${location.protocol}//${location.hostname}:4862/`;
+        const base = raw || `${location.protocol}//${location.hostname}:4863/`;
         const url = new URL(base, location.origin);
         if (token) url.searchParams.set("token", token);
         url.searchParams.set("core", location.origin + "/");

@@ -14,6 +14,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY shottrader ./shottrader
 
 RUN mkdir -p /app/data /app/logs
-EXPOSE 4862
+EXPOSE 4863
 
 CMD ["python", "-m", "shottrader"]

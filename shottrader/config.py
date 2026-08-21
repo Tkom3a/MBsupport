@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 @dataclass
 class TraderConfig:
     host: str = "0.0.0.0"
-    port: int = 4862
+    port: int = 4863
     timezone: str = "Europe/Moscow"
     shotcore_url: str = "http://127.0.0.1:4861"
     shotcore_token: str = ""
@@ -67,7 +67,7 @@ def load_trader_config(root: Path | None = None) -> TraderConfig:
         emulate = False
     return TraderConfig(
         host=os.getenv("TRADER_HOST", "0.0.0.0").strip() or "0.0.0.0",
-        port=_i("TRADER_PORT", 4862),
+        port=_i("TRADER_PORT", 4863),
         timezone=os.getenv("TZ", "Europe/Moscow").strip() or "Europe/Moscow",
         shotcore_url=(os.getenv("SHOTCORE_URL") or "http://127.0.0.1:4861").rstrip("/"),
         shotcore_token=os.getenv("SHOTCORE_TOKEN", "").strip(),
