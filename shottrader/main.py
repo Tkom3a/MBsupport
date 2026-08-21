@@ -113,19 +113,24 @@ class ShotTrader:
         return web.json_response(self.engine.snapshot())
 
     async def _settings(self, request: web.Request) -> web.Response:
-        body = await request.json()
-        if "order_size" in body:
-            self.engine.order_size = max(1.0, float(body["order_size"]))
-            self.cfg.order_size_usdt = self.engine.order_size
-        if "leverage" in body:
-            self.engine.leverage = max(1, int(float(body["leverage"])))
-            self.cfg.leverage = self.engine.leverage
-        if "autostop_usd" in body:
-            self.engine.autostop_usd = max(0.5, float(body["autostop_usd"]))
-            self.cfg.autostop_usd = self.engine.autostop_usd
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "нужен JSON"}, status=400)
+        try:
+            if "order_size" in body and body["order_size"] not in (None, ""):
+                self.engine.order_size = max(1.0, float(body["order_size"]))
+                self.cfg.order_size_usdt = self.engine.order_size
+            if "leverage" in body and body["leverage"] not in (None, ""):
+                self.engine.leverage = max(1, int(float(body["leverage"])))
+                self.cfg.leverage = self.engine.leverage
+            if "autostop_usd" in body and body["autostop_usd"] not in (None, ""):
+                self.engine.autostop_usd = max(0.5, float(body["autostop_usd"]))
+                self.cfg.autostop_usd = self.engine.autostop_usd
+        except (TypeError, ValueError) as exc:
+            return web.json_response({"ok": False, "error": f"неверное значение: {exc}"}, status=400)
         if "shotcore_url" in body:
             self._apply_shotcore_url(str(body.get("shotcore_url") or ""))
-        # Применить size/lever к уже запущенным клонам (autostop читается с engine всегда)
         self.engine.apply_runtime_settings()
         self.engine.note(
             f"настройки: size={self.engine.order_size:g} x{self.engine.leverage} autostop={self.engine.autostop_usd:g}$"

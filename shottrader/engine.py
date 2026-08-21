@@ -55,6 +55,9 @@ class Tape:
         return px or self.last
 
 
+MIN_TP_PCT = 0.3
+
+
 def _sides_from_pair(pair: dict[str, Any]) -> tuple[float, float, float, float]:
     """BUY из DOWN-прострелов, SHORT из UP. Старый план — одна D на обе стороны."""
     buy_d = round(float(pair.get("buy_pct") or 0), 2)
@@ -66,6 +69,12 @@ def _sides_from_pair(pair: dict[str, Any]) -> tuple[float, float, float, float]:
         tp = round(float(pair.get("tp_pct") or 0), 2)
         buy_d = sell_d = d
         buy_tp = sell_tp = tp
+    if buy_d > 0 and buy_tp + 1e-9 < MIN_TP_PCT:
+        buy_d = 0.0
+        buy_tp = 0.0
+    if sell_d > 0 and sell_tp + 1e-9 < MIN_TP_PCT:
+        sell_d = 0.0
+        sell_tp = 0.0
     return buy_d, buy_tp, sell_d, sell_tp
 
 
@@ -325,6 +334,7 @@ class ShotEngine:
             return
         favor = (price - algo.entry) / algo.entry * 100.0 if algo.pos_side == "buy" else (algo.entry - price) / algo.entry * 100.0
         tp = algo.buy_tp if algo.pos_side == "buy" else algo.sell_tp
+        tp = max(tp, MIN_TP_PCT)
         hit_tp = tp > 0 and favor + 1e-12 >= tp
         timed = ts - algo.fill_ts >= self.cfg.hold_ms
         if not hit_tp and not timed:

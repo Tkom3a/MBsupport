@@ -196,11 +196,13 @@
     async function api(path, opts) {
       const res = await fetch(path, {
         cache: "no-store",
+        credentials: "same-origin",
         ...opts,
         headers: { "Content-Type": "application/json", ...((opts && opts.headers) || {}) },
       });
-      if (!res.ok) throw new Error(res.statusText);
-      return res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText || ("HTTP " + res.status));
+      return data;
     }
 
     // Подтянуть URL ShotCore (+ token) из вкладки
@@ -236,13 +238,75 @@
       return `<td class="${cls}">${fmt(n, 3)}%</td>`;
     }
 
+    const settingsDirty = { orderSize: false, leverage: false, autostop: false };
+    let settingsLocked = false;
+    let settingsBusy = false;
+    let settingsHydrated = false;
+
     function syncInput(id, value) {
       const el = document.getElementById(id);
-      if (!el) return;
-      // Не затирать поле, пока пользователь печатает / меняет значение
+      if (!el || settingsLocked || settingsHydrated || settingsDirty[id]) return;
       if (document.activeElement === el) return;
       const next = String(value);
       if (el.value !== next) el.value = next;
+    }
+
+    function readSettings() {
+      return {
+        order_size: Number(document.getElementById("orderSize").value),
+        leverage: Number(document.getElementById("leverage").value),
+        autostop_usd: Number(document.getElementById("autostop").value),
+      };
+    }
+
+    function fillSettings(data) {
+      if (!data) return;
+      if (data.order_size != null) document.getElementById("orderSize").value = data.order_size;
+      if (data.leverage != null) document.getElementById("leverage").value = data.leverage;
+      if (data.autostop_usd != null) document.getElementById("autostop").value = data.autostop_usd;
+      settingsDirty.orderSize = false;
+      settingsDirty.leverage = false;
+      settingsDirty.autostop = false;
+      if (state) {
+        if (data.order_size != null) state.order_size = data.order_size;
+        if (data.leverage != null) state.leverage = data.leverage;
+        if (data.autostop_usd != null) state.autostop_usd = data.autostop_usd;
+      }
+    }
+
+    async function saveSettings() {
+      if (settingsBusy) return;
+      const payload = readSettings();
+      if (!Number.isFinite(payload.order_size) || payload.order_size < 1) {
+        alert("Order size должен быть ≥ 1");
+        return;
+      }
+      if (!Number.isFinite(payload.leverage) || payload.leverage < 1) {
+        alert("Плечо должно быть ≥ 1");
+        return;
+      }
+      if (!Number.isFinite(payload.autostop_usd) || payload.autostop_usd < 0.5) {
+        alert("Авто-стоп должен быть ≥ 0.5");
+        return;
+      }
+      settingsBusy = true;
+      settingsLocked = true;
+      const btn = document.getElementById("saveBtn");
+      btn.disabled = true;
+      try {
+        const res = await api("/api/settings", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        fillSettings(res);
+        await tick();
+      } catch (ex) {
+        alert("Не удалось сохранить: " + (ex.message || ex));
+      } finally {
+        settingsBusy = false;
+        settingsLocked = false;
+        btn.disabled = false;
+      }
     }
 
     function render() {
@@ -256,6 +320,7 @@
       syncInput("orderSize", state.order_size);
       syncInput("leverage", state.leverage);
       syncInput("autostop", state.autostop_usd);
+      settingsHydrated = true;
       document.getElementById("unreal").textContent = money(state.unrealized);
       document.getElementById("unreal").className = "v " + (state.unrealized >= 0 ? "up" : "down");
       document.getElementById("inTrade").textContent = fmt(state.in_trade || 0) + "$";
@@ -328,30 +393,25 @@
     }
 
     async function tick() {
-      state = await api("/api/state");
+      const next = await api("/api/state");
+      if (settingsDirty.orderSize) next.order_size = Number(document.getElementById("orderSize").value);
+      if (settingsDirty.leverage) next.leverage = Number(document.getElementById("leverage").value);
+      if (settingsDirty.autostop) next.autostop_usd = Number(document.getElementById("autostop").value);
+      state = next;
       render();
     }
 
-    document.getElementById("saveBtn").onclick = async () => {
-      const btn = document.getElementById("saveBtn");
-      btn.disabled = true;
-      try {
-        await api("/api/settings", {
-          method: "POST",
-          body: JSON.stringify({
-            order_size: Number(document.getElementById("orderSize").value),
-            leverage: Number(document.getElementById("leverage").value),
-            autostop_usd: Number(document.getElementById("autostop").value),
-          }),
-        });
-        document.activeElement && document.activeElement.blur && document.activeElement.blur();
-        await tick();
-      } catch (ex) {
-        alert("Не удалось сохранить: " + (ex.message || ex));
-      } finally {
-        btn.disabled = false;
-      }
-    };
+    ["orderSize", "leverage", "autostop"].forEach((id) => {
+      const el = document.getElementById(id);
+      el.addEventListener("input", () => { settingsDirty[id] = true; });
+      el.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          saveSettings();
+        }
+      });
+    });
+    document.getElementById("saveBtn").onclick = () => saveSettings();
     document.getElementById("panicBtn").onclick = () => api("/api/panic", { method: "POST", body: "{}" }).then(tick);
     document.getElementById("resumeBtn").onclick = () => api("/api/resume", { method: "POST", body: "{}" }).then(tick);
     document.getElementById("logToggle").onclick = () => {

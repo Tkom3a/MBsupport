@@ -75,7 +75,7 @@ class ShotStore:
         self.tz = _zone(tz_name)
         self.distance_levels = distance_levels or [1.11, 1.32, 1.42, 1.63, 1.78]
         self.retain_hours = max(1, int(retain_hours))
-        self.tp_min_pct = max(float(tp_min_pct), 0.0)
+        self.tp_min_pct = max(float(tp_min_pct), 0.3)
         self.hold_ms = max(int(hold_ms), 50)
         self.suggest_inside_pct = max(float(suggest_inside_pct), 0.0)
         self.suggest_inside_max_pct = max(float(suggest_inside_max_pct), self.suggest_inside_pct)
@@ -266,6 +266,7 @@ class ShotStore:
                 inside_max=self.suggest_inside_max_pct,
                 min_win_pct=self.min_win_pct,
                 min_fills=self.min_fills,
+                tp_min_pct=self.tp_min_pct,
             )
             sell_d, sell_plus, sell_minus, sell_win, sell_tp, sell_hint = _recommend_and_score(
                 up_shots,
@@ -275,6 +276,7 @@ class ShotStore:
                 inside_max=self.suggest_inside_max_pct,
                 min_win_pct=self.min_win_pct,
                 min_fills=self.min_fills,
+                tp_min_pct=self.tp_min_pct,
             )
             # Сводная колонка — лучшая из сторон, без смешивания UP+DOWN в одну D.
             if buy_d > 0 and (sell_d <= 0 or (buy_plus, buy_win) >= (sell_plus, sell_win)):
@@ -396,13 +398,24 @@ class ShotStore:
         for row in payload.get("rows") or []:
             buy_pct = round(float(row.get("buy_pct") or 0), 4)
             sell_pct = round(float(row.get("sell_pct") or 0), 4)
+            buy_tp = round(float(row.get("buy_tp_pct") or 0), 4)
+            sell_tp = round(float(row.get("sell_tp_pct") or 0), 4)
+            if buy_pct > 0 and buy_tp + 1e-9 < self.tp_min_pct:
+                buy_pct = 0.0
+                buy_tp = 0.0
+            if sell_pct > 0 and sell_tp + 1e-9 < self.tp_min_pct:
+                sell_pct = 0.0
+                sell_tp = 0.0
             recommend = round(float(row.get("suggest_distance") or 0), 4)
+            tp = round(float(row.get("suggest_tp_pct") or 0), 4)
+            if recommend > 0 and tp + 1e-9 < self.tp_min_pct:
+                recommend = buy_pct if buy_pct > 0 else sell_pct
+                tp = buy_tp if buy_pct > 0 else sell_tp
             if buy_pct <= 0 and sell_pct <= 0 and recommend <= 0:
                 continue
             symbol = str(row.get("symbol") or "")
             if not symbol:
                 continue
-            tp = round(float(row.get("suggest_tp_pct") or 0), 4)
             pairs.append(
                 {
                     "symbol": symbol,
@@ -410,10 +423,10 @@ class ShotStore:
                     "recommend_pct": recommend,
                     "tp_pct": tp,
                     "buy_pct": buy_pct,
-                    "buy_tp_pct": round(float(row.get("buy_tp_pct") or 0), 4),
+                    "buy_tp_pct": buy_tp,
                     "buy_win_prob": float(row.get("buy_win_prob") or 0),
                     "sell_pct": sell_pct,
-                    "sell_tp_pct": round(float(row.get("sell_tp_pct") or 0), 4),
+                    "sell_tp_pct": sell_tp,
                     "sell_win_prob": float(row.get("sell_win_prob") or 0),
                     "hold_ms": hold_ms,
                     "run_hours": hours,
@@ -583,13 +596,15 @@ def _recommend_and_score(
     inside_max: float | None = None,
     min_win_pct: float = 70.0,
     min_fills: int = 3,
+    tp_min_pct: float = 0.3,
 ) -> tuple[float, int, int, float, float, str]:
     """Все прострелы пары, затем D у края и фильтр шума.
 
-    Ордер на 0.05–0.10% внутрь экстремума. Выход: TP за 0.3 с или по времени.
+    Ордер на 0.05–0.10% внутрь экстремума. Выход только с TP ≥ 0.3%.
     Рекомендация только если доля плюса не ниже min_win_pct.
     """
     inside_hi = inside if inside_max is None else inside_max
+    tp_min = max(0.3, float(tp_min_pct or 0.3))
     variants: list[tuple[str, list[dict[str, Any]]]] = [("все", shots)]
     calm = [row for row in shots if row.get("btc_calm")]
     if min_fills <= len(calm) < len(shots):
@@ -612,6 +627,7 @@ def _recommend_and_score(
             levels or [],
             min_win_pct,
             min_fills,
+            tp_min,
         )
         if found is None:
             continue
@@ -621,6 +637,8 @@ def _recommend_and_score(
     if best is None:
         return 0.0, 0, 0, 0.0, 0.0, ""
     _total, plus, _hits, filled, distance, tp = best
+    if tp + 1e-9 < tp_min:
+        return 0.0, 0, 0, 0.0, 0.0, ""
     minus = int(filled) - plus
     prob = round(100.0 * plus / filled, 1) if filled else 0.0
     return round(distance, 2), plus, minus, prob, round(tp, 2), hint
@@ -634,6 +652,7 @@ def _search_dtp(
     levels: list[float],
     min_win_pct: float,
     min_fills: int,
+    tp_min_pct: float = 0.3,
 ) -> tuple | None:
     if len(shots) < min_fills:
         return None
@@ -641,7 +660,8 @@ def _search_dtp(
     if not distances:
         return None
     indexed = [(shot, _report_map(shot)) for shot in shots]
-    tps = _candidate_tps()
+    tp_min = max(0.3, round(float(tp_min_pct or 0.3), 2))
+    tps = _candidate_tps(tp_min)
     best: tuple | None = None
     for distance in distances:
         fills: list[tuple[float, float]] = []
@@ -653,20 +673,22 @@ def _search_dtp(
         if len(fills) < min_fills:
             continue
         max_mfe = max(mfe for _time_pnl, mfe in fills)
-        tp_set = {tp for tp in tps if 0 < tp <= max_mfe + 1e-9}
+        if max_mfe + 1e-9 < tp_min:
+            continue
+        tp_set = {tp for tp in tps if tp_min - 1e-9 <= tp <= max_mfe + 1e-9}
         for _time_pnl, mfe in fills:
             hittable = math.floor(mfe * 100.0 + 1e-9) / 100.0
-            if hittable >= 0.05:
+            if hittable + 1e-9 >= tp_min:
                 tp_set.add(round(hittable, 2))
-                tp_set.add(round(max(0.05, hittable - 0.01), 2))
-        options: list[float | None] = sorted(tp_set)
-        options.append(None)
-        for tp in options:
+                lower = round(hittable - 0.01, 2)
+                if lower + 1e-9 >= tp_min:
+                    tp_set.add(lower)
+        for tp in sorted(tp_set):
             total = 0.0
             plus = 0
             hits = 0
             for time_pnl, mfe in fills:
-                if tp is not None and mfe + 1e-12 >= tp:
+                if mfe + 1e-12 >= tp:
                     pnl = tp
                     hits += 1
                 else:
@@ -677,8 +699,7 @@ def _search_dtp(
             win = 100.0 * plus / len(fills)
             if win + 1e-9 < min_win_pct or total <= 0:
                 continue
-            shown_tp = 0.0 if tp is None else tp
-            key = (round(total, 6), plus, hits, len(fills), distance, shown_tp)
+            key = (round(total, 6), plus, hits, len(fills), distance, tp)
             if _score_better(key, best):
                 best = key
     return best
@@ -729,8 +750,9 @@ def _candidate_distances(
     return sorted(d for d in dists if 0.5 <= d <= 20.0)
 
 
-def _candidate_tps() -> list[float]:
-    return [round(step * 0.05, 2) for step in range(2, 41)]
+def _candidate_tps(tp_min: float = 0.3) -> list[float]:
+    floor = max(0.3, round(float(tp_min or 0.3), 2))
+    return [round(step * 0.05, 2) for step in range(6, 41) if round(step * 0.05, 2) + 1e-9 >= floor]
 
 
 def _report_map(shot: dict[str, Any]) -> dict[float, dict[str, Any]]:
