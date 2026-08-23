@@ -183,6 +183,9 @@ class ShotTrader:
             if "v1_offset" in body and body["v1_offset"] not in (None, ""):
                 self.engine.v1_offset = max(-2.0, min(5.0, float(body["v1_offset"])))
                 self.cfg.v1_offset = self.engine.v1_offset
+            if "v1_fail_bump" in body and body["v1_fail_bump"] not in (None, ""):
+                self.engine.v1_fail_bump = max(0.0, min(2.0, float(body["v1_fail_bump"])))
+                self.cfg.v1_fail_bump = self.engine.v1_fail_bump
             if "pair_lose_limit" in body and body["pair_lose_limit"] not in (None, ""):
                 self.engine.pair_lose_limit = max(1, int(float(body["pair_lose_limit"])))
                 self.cfg.pair_lose_limit = self.engine.pair_lose_limit
@@ -207,8 +210,8 @@ class ShotTrader:
             f"long={'on' if self.engine.trade_long else 'off'} "
             f"short={'on' if self.engine.trade_short else 'off'} "
             f"minD={self.engine.min_order_distance:g}% v2gap={self.engine.min_v2_gap:g}% "
-            f"v1off={self.engine.v1_offset:+g}% "
-            f"бан={self.engine.pair_lose_limit} минуса / {self.engine.pair_lose_window_hours:g}ч "
+            f"v1off={self.engine.v1_offset:+g}% v1fail=+{self.engine.v1_fail_bump:g}% "
+            f"бан={self.engine.pair_lose_limit} подряд / "
             f"→ {self.engine.pair_ban_hours:g}ч  подтверждений={self.engine.min_fills}"
         )
         return web.json_response(
@@ -224,6 +227,7 @@ class ShotTrader:
                 "min_order_distance": self.engine.min_order_distance,
                 "min_v2_gap": self.engine.min_v2_gap,
                 "v1_offset": self.engine.v1_offset,
+                "v1_fail_bump": self.engine.v1_fail_bump,
                 "pair_lose_limit": self.engine.pair_lose_limit,
                 "pair_lose_window_hours": self.engine.pair_lose_window_hours,
                 "pair_ban_hours": self.engine.pair_ban_hours,

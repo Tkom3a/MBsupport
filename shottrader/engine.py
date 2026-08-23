@@ -171,6 +171,11 @@ class Algo:
     v2_fill_ts: int = 0
     qty: str = "1"
     fingerprint: str = ""
+    last_v1_pnl: float | None = None
+    last_v2_pnl: float | None = None
+    last_v1_ts: int = 0
+    last_v2_ts: int = 0
+    v1_rescue_key: str = ""
 
 
 class ShotEngine:
@@ -198,6 +203,8 @@ class ShotEngine:
         self.min_order_distance = cfg.min_order_distance
         self.min_v2_gap = cfg.min_v2_gap
         self.v1_offset = cfg.v1_offset
+        self.v1_fail_bump = cfg.v1_fail_bump
+        self.v1_fail_bumps: dict[str, float] = {}
         self.pair_lose_limit = cfg.pair_lose_limit
         self.pair_lose_window_hours = cfg.pair_lose_window_hours
         self.pair_ban_hours = cfg.pair_ban_hours
@@ -251,6 +258,8 @@ class ShotEngine:
             self.min_v2_gap = max(0.05, float(raw["min_v2_gap"]))
         if raw.get("v1_offset") not in (None, ""):
             self.v1_offset = max(-2.0, min(5.0, float(raw["v1_offset"])))
+        if raw.get("v1_fail_bump") not in (None, ""):
+            self.v1_fail_bump = max(0.0, min(2.0, float(raw["v1_fail_bump"])))
         if raw.get("pair_lose_limit") not in (None, ""):
             self.pair_lose_limit = max(1, int(float(raw["pair_lose_limit"])))
         if raw.get("pair_lose_window_hours") not in (None, ""):
@@ -270,6 +279,7 @@ class ShotEngine:
             "min_order_distance": self.min_order_distance,
             "min_v2_gap": self.min_v2_gap,
             "v1_offset": self.v1_offset,
+            "v1_fail_bump": self.v1_fail_bump,
             "pair_lose_limit": self.pair_lose_limit,
             "pair_lose_window_hours": self.pair_lose_window_hours,
             "pair_ban_hours": self.pair_ban_hours,
@@ -295,9 +305,13 @@ class ShotEngine:
                 self.ban_until_hist[str(key).upper()] = until
         for key, val in (raw.get("hist") or {}).items():
             self.ban_until_hist[str(key).upper()] = max(int(val or 0), self.ban_until_hist.get(str(key).upper(), 0))
+        for key, val in (raw.get("v1_fail_bumps") or {}).items():
+            extra = round(float(val or 0), 2)
+            if extra > 0:
+                self.v1_fail_bumps[str(key).upper()] = extra
 
     def _save_bans(self) -> None:
-        payload = {"bans": self.bans, "hist": self.ban_until_hist}
+        payload = {"bans": self.bans, "hist": self.ban_until_hist, "v1_fail_bumps": self.v1_fail_bumps}
         tmp = self.bans_path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(self.bans_path)
@@ -326,39 +340,92 @@ class ShotEngine:
             rows.append({"symbol": symbol, "until_ts": until, "left_min": left})
         return rows
 
-    def _recent_losses(self, symbol: str) -> int:
-        now = _now_ms()
-        window = int(self.pair_lose_window_hours * 3600 * 1000)
-        cutoff = now - window
+    def _loss_streak(self, symbol: str) -> int:
+        """Сколько минусов подряд с конца журнала пары (после прошлого бана)."""
         last_ban_end = int(self.ban_until_hist.get(symbol, 0) or 0)
-        if last_ban_end and now >= last_ban_end:
-            cutoff = max(cutoff, last_ban_end)
-        n = 0
+        rows: list[tuple[int, float]] = []
         for row in getattr(self, "_journal_all", list(self.journal)):
             if str(row.get("symbol") or "").upper() != symbol:
                 continue
-            if int(row.get("ts") or 0) < cutoff:
+            ts = int(row.get("ts") or 0)
+            if last_ban_end and ts < last_ban_end:
                 continue
-            if float(row.get("pnl_usd") or 0) <= 0:
-                n += 1
-        return n
+            rows.append((ts, float(row.get("pnl_usd") or 0)))
+        rows.sort(key=lambda item: item[0])
+        streak = 0
+        for _ts, pnl in reversed(rows):
+            if pnl <= 0:
+                streak += 1
+            else:
+                break
+        return streak
 
     def _maybe_pair_ban(self, symbol: str) -> bool:
         symbol = str(symbol or "").upper()
         if not symbol or self.is_banned(symbol):
             return False
-        if self._recent_losses(symbol) < self.pair_lose_limit:
+        if self._loss_streak(symbol) < self.pair_lose_limit:
             return False
         until = _now_ms() + int(self.pair_ban_hours * 3600 * 1000)
         self.bans[symbol] = until
         self.ban_until_hist[symbol] = until
+        self.v1_fail_bumps.pop(symbol, None)
         self._save_bans()
         self.note(
-            f"БАН {symbol}: {self.pair_lose_limit} минуса за {self.pair_lose_window_hours:g}ч "
+            f"БАН {symbol}: {self.pair_lose_limit} минуса подряд "
             f"— не следим {self.pair_ban_hours:g}ч"
         )
         self._kill(symbol, "pair-ban")
         return True
+
+    def _maybe_v1_fail_bump(self, algo: Algo) -> None:
+        """V1 минус + V2 плюс → поднять первую D этой пары."""
+        bump = round(float(self.v1_fail_bump or 0), 2)
+        if bump <= 0 or self.is_banned(algo.symbol):
+            return
+        if algo.last_v1_pnl is None or algo.last_v2_pnl is None:
+            return
+        if algo.last_v1_pnl > 0 or algo.last_v2_pnl <= 0:
+            return
+        key = f"{algo.last_v1_ts}:{algo.last_v2_ts}"
+        if algo.v1_rescue_key == key:
+            return
+        algo.v1_rescue_key = key
+        symbol = algo.symbol
+        self.v1_fail_bumps[symbol] = round(self.v1_fail_bumps.get(symbol, 0) + bump, 2)
+        self._save_bans()
+        if algo.buy_distance > 0:
+            algo.buy_distance = round(algo.buy_distance + bump, 2)
+        if algo.sell_distance > 0:
+            algo.sell_distance = round(algo.sell_distance + bump, 2)
+        algo.distance = algo.buy_distance if algo.buy_distance > 0 else algo.sell_distance
+        gap = max(0.05, round(float(self.min_v2_gap or 0.3), 2))
+        if algo.buy_distance > 0 and algo.buy_v2_distance > 0:
+            want = round(algo.buy_distance + gap, 2)
+            if algo.buy_v2_distance + 1e-9 < want:
+                algo.buy_v2_distance = want
+                if algo.v2_state == "hunt":
+                    algo.buy_v2_px = 0.0
+                    algo.buy_v2_id = ""
+        if algo.sell_distance > 0 and algo.sell_v2_distance > 0:
+            want = round(algo.sell_distance + gap, 2)
+            if algo.sell_v2_distance + 1e-9 < want:
+                algo.sell_v2_distance = want
+                if algo.v2_state == "hunt":
+                    algo.sell_v2_px = 0.0
+                    algo.sell_v2_id = ""
+        if algo.state == "hunt":
+            algo.buy_px = 0.0
+            algo.sell_px = 0.0
+            algo.buy_id = algo.sell_id = ""
+        algo.fingerprint = (
+            f"{algo.buy_distance}|{algo.buy_tp}|{algo.sell_distance}|{algo.sell_tp}|"
+            f"{algo.buy_v2_distance}|{algo.sell_v2_distance}"
+        )
+        self.note(
+            f"{symbol} V1 минус / V2 плюс — поднимаю V1 на {bump:g}% "
+            f"(накоплено +{self.v1_fail_bumps[symbol]:g}%)"
+        )
 
     def _filter_sides(self, sides: Sides) -> Sides:
         if not self.trade_long:
@@ -368,16 +435,19 @@ class ShotEngine:
         return sides
 
     def _plan_sides(self, pair: dict[str, Any]) -> Sides:
-        return self._apply_distance_rules(self._filter_sides(_sides_from_pair(pair)))
+        symbol = str(pair.get("symbol") or "").upper()
+        return self._apply_distance_rules(self._filter_sides(_sides_from_pair(pair)), symbol)
 
-    def _apply_distance_rules(self, sides: Sides) -> Sides:
+    def _apply_distance_rules(self, sides: Sides, symbol: str = "") -> Sides:
         """Смещение первой D от рекомендации; V2 не ближе min_v2_gap; пол min_order_distance."""
         off = round(float(self.v1_offset or 0), 2)
-        if abs(off) > 1e-9:
+        extra = round(float(self.v1_fail_bumps.get(str(symbol or "").upper(), 0) or 0), 2)
+        shift = round(off + extra, 2)
+        if abs(shift) > 1e-9:
             if sides.buy_d > 0:
-                sides.buy_d = round(sides.buy_d + off, 2)
+                sides.buy_d = round(sides.buy_d + shift, 2)
             if sides.sell_d > 0:
-                sides.sell_d = round(sides.sell_d + off, 2)
+                sides.sell_d = round(sides.sell_d + shift, 2)
         gap = max(0.05, round(float(self.min_v2_gap or 0.3), 2))
         floor = max(0.0, round(float(self.min_order_distance or 0), 2))
 
@@ -590,7 +660,7 @@ class ShotEngine:
             score_n = int(pair.get("score_plus") or 0) + int(pair.get("score_minus") or 0)
             if score_n and score_n < self.min_fills:
                 continue
-            if self._recent_losses(symbol) >= self.pair_lose_limit:
+            if self._loss_streak(symbol) >= self.pair_lose_limit:
                 self._maybe_pair_ban(symbol)
                 continue
             wanted[symbol] = pair
@@ -914,6 +984,13 @@ class ShotEngine:
             algo.fill_ts = 0
             algo.buy_px = 0.0
             algo.sell_px = 0.0
+        if layer == "v1":
+            algo.last_v1_pnl = pnl
+            algo.last_v1_ts = int(row["ts"])
+        else:
+            algo.last_v2_pnl = pnl
+            algo.last_v2_ts = int(row["ts"])
+        self._maybe_v1_fail_bump(algo)
         if pnl <= 0:
             self._maybe_pair_ban(algo.symbol)
         if pnl <= -self.autostop_usd:
@@ -1185,6 +1262,12 @@ class ShotEngine:
             "min_order_distance": self.min_order_distance,
             "min_v2_gap": self.min_v2_gap,
             "v1_offset": self.v1_offset,
+            "v1_fail_bump": self.v1_fail_bump,
+            "v1_fail_bumps": [
+                {"symbol": sym, "extra": extra}
+                for sym, extra in sorted(self.v1_fail_bumps.items())
+                if extra > 0
+            ],
             "pair_lose_limit": self.pair_lose_limit,
             "pair_lose_window_hours": self.pair_lose_window_hours,
             "pair_ban_hours": self.pair_ban_hours,

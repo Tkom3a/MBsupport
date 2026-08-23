@@ -175,6 +175,14 @@
           рекомендация 1% → ордер 1.00% · плюс глубже, минус ближе
         </div>
         <button class="primary" id="saveOffsetBtn">Применить зазор</button>
+        <h2 style="margin-top:14px">Подъём V1 после неудачи</h2>
+        <label>На сколько поднять V1, %</label>
+        <input id="v1FailBump" type="number" step="0.01" min="0" max="2" value="0.15" />
+        <div class="muted" id="v1FailHint" style="margin:6px 0 8px">
+          V1 минус и V2 плюс → первая дистанция пары +0.15%
+        </div>
+        <button class="primary" id="saveFailBumpBtn">Применить подъём</button>
+        <div id="v1FailList" class="muted" style="margin-top:8px"></div>
         <h2 style="margin-top:14px">Направление</h2>
         <label class="dir-check"><input id="tradeLong" type="checkbox" checked /> Ставить лонги (BUY)</label>
         <label class="dir-check"><input id="tradeShort" type="checkbox" checked /> Ставить шорты (SHORT)</label>
@@ -196,7 +204,7 @@
         <div class="kpi"><div class="l">1 час · сделки / PnL</div><div class="v" id="hour">0 / 0$</div></div>
         <div class="kpi"><div class="l">Сегодня · сделки / PnL</div><div class="v" id="day">0 / 0$</div></div>
         <h2 style="margin-top:14px">Бан пар</h2>
-        <label>Минусов до бана</label>
+        <label>Минусов подряд до бана</label>
         <input id="banLoseLimit" type="number" step="1" min="1" value="2" />
         <div class="row2">
           <div>
@@ -375,7 +383,7 @@
 
     const settingsDirty = {
       orderSize20: false, orderSize50: false, autostop: false, minDist: false, minV2Gap: false, v1Offset: false,
-      banLoseLimit: false, banLoseWindow: false, banHours: false, minFills: false,
+      banLoseLimit: false, banLoseWindow: false, banHours: false, minFills: false, v1FailBump: false,
     };
     let settingsLocked = false;
     let settingsBusy = false;
@@ -397,6 +405,7 @@
         min_order_distance: Number(document.getElementById("minDist").value),
         min_v2_gap: Number(document.getElementById("minV2Gap").value),
         v1_offset: Number(document.getElementById("v1Offset").value),
+        v1_fail_bump: Number(document.getElementById("v1FailBump").value),
         pair_lose_limit: Number(document.getElementById("banLoseLimit").value),
         pair_lose_window_hours: Number(document.getElementById("banLoseWindow").value),
         pair_ban_hours: Number(document.getElementById("banHours").value),
@@ -414,6 +423,7 @@
       if (data.min_order_distance != null) document.getElementById("minDist").value = data.min_order_distance;
       if (data.min_v2_gap != null) document.getElementById("minV2Gap").value = data.min_v2_gap;
       if (data.v1_offset != null) document.getElementById("v1Offset").value = data.v1_offset;
+      if (data.v1_fail_bump != null) document.getElementById("v1FailBump").value = data.v1_fail_bump;
       if (data.pair_lose_limit != null) document.getElementById("banLoseLimit").value = data.pair_lose_limit;
       if (data.pair_lose_window_hours != null) document.getElementById("banLoseWindow").value = data.pair_lose_window_hours;
       if (data.pair_ban_hours != null) document.getElementById("banHours").value = data.pair_ban_hours;
@@ -426,6 +436,7 @@
       settingsDirty.minDist = false;
       settingsDirty.minV2Gap = false;
       settingsDirty.v1Offset = false;
+      settingsDirty.v1FailBump = false;
       settingsDirty.banLoseLimit = false;
       settingsDirty.banLoseWindow = false;
       settingsDirty.banHours = false;
@@ -437,6 +448,7 @@
         if (data.min_order_distance != null) state.min_order_distance = data.min_order_distance;
         if (data.min_v2_gap != null) state.min_v2_gap = data.min_v2_gap;
         if (data.v1_offset != null) state.v1_offset = data.v1_offset;
+        if (data.v1_fail_bump != null) state.v1_fail_bump = data.v1_fail_bump;
         if (data.pair_lose_limit != null) state.pair_lose_limit = data.pair_lose_limit;
         if (data.pair_lose_window_hours != null) state.pair_lose_window_hours = data.pair_lose_window_hours;
         if (data.pair_ban_hours != null) state.pair_ban_hours = data.pair_ban_hours;
@@ -471,6 +483,10 @@
       }
       if (!Number.isFinite(payload.v1_offset) || payload.v1_offset < -2 || payload.v1_offset > 5) {
         alert("Зазор первого ордера должен быть от −2% до +5%");
+        return;
+      }
+      if (!Number.isFinite(payload.v1_fail_bump) || payload.v1_fail_bump < 0 || payload.v1_fail_bump > 2) {
+        alert("Подъём V1 после неудачи должен быть от 0% до 2%");
         return;
       }
       if (!Number.isFinite(payload.pair_lose_limit) || payload.pair_lose_limit < 1) {
@@ -526,6 +542,7 @@
       syncInput("minDist", state.min_order_distance);
       syncInput("minV2Gap", state.min_v2_gap);
       syncInput("v1Offset", state.v1_offset);
+      syncInput("v1FailBump", state.v1_fail_bump);
       syncInput("banLoseLimit", state.pair_lose_limit);
       syncInput("banLoseWindow", state.pair_lose_window_hours);
       syncInput("banHours", state.pair_ban_hours);
@@ -552,10 +569,19 @@
       const td = state.today || state.day || {};
       document.getElementById("day").textContent = `${td.trades || 0} (+${td.plus || 0}/−${td.minus || 0}) / ${money(td.pnl_usd)}`;
       const loseN = Number(state.pair_lose_limit || 2);
-      const loseH = Number(state.pair_lose_window_hours || 3);
       const banH = Number(state.pair_ban_hours || 3);
       document.getElementById("banRule").textContent =
-        `${loseN} минуса за ${loseH}ч → бан ${banH}ч · не следим`;
+        `${loseN} минуса подряд → бан ${banH}ч · плюс между ними сбрасывает`;
+      const failBump = Number(state.v1_fail_bump || 0);
+      document.getElementById("v1FailHint").textContent =
+        `V1 минус и V2 плюс → первая дистанция пары +${failBump.toFixed(2)}%`;
+      const failRows = state.v1_fail_bumps || [];
+      document.getElementById("v1FailList").innerHTML = failRows.length
+        ? failRows.map((b) => {
+            const name = String(b.symbol || "").replace("-USDT-SWAP", "");
+            return `<div class="amber" style="margin-bottom:3px">${name} V1 +${Number(b.extra || 0).toFixed(2)}%</div>`;
+          }).join("")
+        : "";
       const fillsN = Number(state.min_fills || 2);
       document.getElementById("fillsHint").textContent =
         `Дистанция должна подтвердиться ${fillsN} раз, иначе пару в план не берём.`;
@@ -769,6 +795,7 @@
       if (settingsDirty.minDist) next.min_order_distance = Number(document.getElementById("minDist").value);
       if (settingsDirty.minV2Gap) next.min_v2_gap = Number(document.getElementById("minV2Gap").value);
       if (settingsDirty.v1Offset) next.v1_offset = Number(document.getElementById("v1Offset").value);
+      if (settingsDirty.v1FailBump) next.v1_fail_bump = Number(document.getElementById("v1FailBump").value);
       if (settingsDirty.banLoseLimit) next.pair_lose_limit = Number(document.getElementById("banLoseLimit").value);
       if (settingsDirty.banLoseWindow) next.pair_lose_window_hours = Number(document.getElementById("banLoseWindow").value);
       if (settingsDirty.banHours) next.pair_ban_hours = Number(document.getElementById("banHours").value);
@@ -777,7 +804,7 @@
       render();
     }
 
-    ["orderSize20", "orderSize50", "autostop", "minDist", "minV2Gap", "v1Offset", "banLoseLimit", "banLoseWindow", "banHours", "minFills"].forEach((id) => {
+    ["orderSize20", "orderSize50", "autostop", "minDist", "minV2Gap", "v1Offset", "v1FailBump", "banLoseLimit", "banLoseWindow", "banHours", "minFills"].forEach((id) => {
       const el = document.getElementById(id);
       el.addEventListener("input", () => { settingsDirty[id] = true; });
       el.addEventListener("keydown", (ev) => {
@@ -790,6 +817,7 @@
     document.getElementById("saveBtn").onclick = () => saveSettings();
     document.getElementById("saveFillsBtn").onclick = () => saveSettings();
     document.getElementById("saveOffsetBtn").onclick = () => saveSettings();
+    document.getElementById("saveFailBumpBtn").onclick = () => saveSettings();
     ["tradeLong", "tradeShort"].forEach((id) => {
       document.getElementById(id).addEventListener("change", () => saveSettings());
     });
