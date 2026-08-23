@@ -280,7 +280,8 @@
   <script>
     let state = null;
     const qs = new URLSearchParams(location.search);
-    const coreUrl = (qs.get("core") || `${location.protocol}//${location.hostname}:4861/`).replace(/\/?$/, "/");
+    const explicitCore = (qs.get("core") || "").trim();
+    const coreUrl = (explicitCore || `${location.protocol}//${location.hostname}:4861/`).replace(/\/?$/, "/");
     document.getElementById("linkCore").href = coreUrl;
 
     async function api(path, opts) {
@@ -295,14 +296,17 @@
       return data;
     }
 
-    // Подтянуть URL ShotCore (+ token) из вкладки
-    api("/api/shotcore", {
-      method: "POST",
-      body: JSON.stringify({
-        url: coreUrl.replace(/\/$/, ""),
-        token: qs.get("token") || "",
-      }),
-    }).catch(() => {});
+    // Не угадывать ShotCore по hostname вкладки: на внешнем IP:4861 часто чужой сервис.
+    // URL ядра берём из shottrader/.env, а ?core= — только если его явно передали.
+    if (explicitCore) {
+      api("/api/shotcore", {
+        method: "POST",
+        body: JSON.stringify({
+          url: explicitCore.replace(/\/$/, ""),
+          token: qs.get("token") || "",
+        }),
+      }).catch(() => {});
+    }
 
     fetch("/api/auth/status").then((r) => r.json()).then((s) => {
       const out = document.getElementById("linkLogout");
@@ -414,6 +418,9 @@
 
     function render() {
       if (!state) return;
+      if (!explicitCore && state.shotcore_url) {
+        document.getElementById("linkCore").href = String(state.shotcore_url).replace(/\/?$/, "/");
+      }
       const badge = document.getElementById("modeBadge");
       badge.textContent = state.emulate ? "эмуляция" : "LIVE";
       badge.className = "badge " + (state.emulate ? "emu" : "live");

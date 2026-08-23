@@ -275,6 +275,8 @@ class ShotTrader:
             params["token"] = token
         url = f"{self.cfg.shotcore_url}/api/mt-plan?{urlencode(params)}"
         async with self.session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+            ctype = str(resp.headers.get("Content-Type") or "").lower()
+            final = str(resp.url)
             if resp.status != 200:
                 text = await resp.text()
                 if resp.status == 401:
@@ -283,6 +285,14 @@ class ShotTrader:
                         f"(или SESSION_SECRET) на ShotCore и ShotTrader. {text[:120]}"
                     )
                 raise RuntimeError(f"{resp.status} {text[:200]}")
+            if "json" not in ctype or "html" in ctype or "/users/sign_in" in final:
+                raise RuntimeError(
+                    f"SHOTCORE_URL={self.cfg.shotcore_url} указывает не на ShotCore, "
+                    f"а на другой сайт ({final}). "
+                    "В shottrader/.env поставьте внутренний адрес ядра "
+                    "(например http://192.168.1.26:4861 или http://shotcore:4861), "
+                    "не внешний IP:4861."
+                )
             return await resp.json()
 
     async def _follow_loop(self) -> None:

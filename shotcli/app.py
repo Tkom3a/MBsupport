@@ -377,10 +377,16 @@ def apply_set(cli: ShotClient, key: str, value: str) -> None:
         "x50": "order_size_x50",
         "autostop": "autostop_usd",
         "stop": "autostop_usd",
+        "core": "shotcore_url",
+        "shotcore": "shotcore_url",
     }
     field = mapping.get(key)
     if not field:
-        raise RuntimeError(f"неизвестный ключ {key}. доступны: long, short, size20, size50, autostop")
+        raise RuntimeError(f"неизвестный ключ {key}. доступны: long, short, size20, size50, autostop, core")
+    if field == "shotcore_url":
+        res = cli.trader_post("/api/shotcore", {"url": value})
+        print(f"ok  ShotCore URL → {res.get('shotcore_url')}")
+        return
     payload: dict[str, Any]
     if field in {"trade_long", "trade_short"}:
         payload = {field: _as_bool(value)}
