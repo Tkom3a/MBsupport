@@ -60,7 +60,7 @@ class ShotStore:
         suggest_inside_pct: float = 0.05,
         suggest_inside_max_pct: float = 0.10,
         min_win_pct: float = 70.0,
-        min_fills: int = 3,
+        min_fills: int = 2,
         mt_plan_name: str = "mt_plan.json",
         mt_run_hours: float = 3.0,
     ):
@@ -232,12 +232,20 @@ class ShotStore:
         items.reverse()
         return [_public_event(item, self.tz) for item in items]
 
-    def stats(self, lookback_min: int = 0, direction: str = "", only_btc_calm: bool = False) -> dict[str, Any]:
+    def stats(
+        self,
+        lookback_min: int = 0,
+        direction: str = "",
+        only_btc_calm: bool = False,
+        min_fills: int | None = None,
+    ) -> dict[str, Any]:
         items = self._filtered(lookback_min, direction, only_btc_calm)
+        fills = max(1, int(min_fills)) if min_fills not in (None, "") else self.min_fills
         memo_key = (
             lookback_min,
             direction,
             only_btc_calm,
+            fills,
             len(items),
             int(items[-1]["peak_ts"]) if items else 0,
             self.total,
@@ -265,7 +273,7 @@ class ShotStore:
                 self.distance_levels,
                 inside_max=self.suggest_inside_max_pct,
                 min_win_pct=self.min_win_pct,
-                min_fills=self.min_fills,
+                min_fills=fills,
                 tp_min_pct=self.tp_min_pct,
             )
             sell_d, sell_plus, sell_minus, sell_win, sell_tp, sell_hint = _recommend_and_score(
@@ -275,7 +283,7 @@ class ShotStore:
                 self.distance_levels,
                 inside_max=self.suggest_inside_max_pct,
                 min_win_pct=self.min_win_pct,
-                min_fills=self.min_fills,
+                min_fills=fills,
                 tp_min_pct=self.tp_min_pct,
             )
             # Сводная колонка — лучшая из сторон, без смешивания UP+DOWN в одну D.
@@ -350,6 +358,7 @@ class ShotStore:
         sell_v2s = [float(r["sell_v2_pct"]) for r in rows if float(r.get("sell_v2_pct") or 0) > 0]
         payload = {
             "lookback_min": lookback_min,
+            "min_fills": fills,
             "shots": len(items),
             "pairs": len(rows),
             "avg": round(statistics.fmean(all_pct), 4) if all_pct else 0.0,
@@ -416,8 +425,9 @@ class ShotStore:
         subscribed: set[str] | None = None,
         run_hours: float | None = None,
         stats_payload: dict[str, Any] | None = None,
+        min_fills: int | None = None,
     ) -> dict[str, Any]:
-        payload = stats_payload or self.stats(lookback_min=lookback_min)
+        payload = stats_payload or self.stats(lookback_min=lookback_min, min_fills=min_fills)
         hours = max(float(run_hours if run_hours is not None else self.mt_run_hours), 0.1)
         hold_ms = int(payload.get("hold_ms") or self.hold_ms)
         now = datetime.now(tz=timezone.utc)
@@ -494,6 +504,7 @@ class ShotStore:
             "run_hours": hours,
             "hold_ms": hold_ms,
             "lookback_min": int(payload.get("lookback_min") or lookback_min or 0),
+            "min_fills": int(payload.get("min_fills") or self.min_fills),
             "avg_buy_pct": float(payload.get("avg_buy_pct") or 0),
             "avg_sell_pct": float(payload.get("avg_sell_pct") or 0),
             "rec_buy_n": int(payload.get("rec_buy_n") or 0),
@@ -705,7 +716,7 @@ def _recommend_and_score(
     levels: list[float] | None = None,
     inside_max: float | None = None,
     min_win_pct: float = 70.0,
-    min_fills: int = 3,
+    min_fills: int = 2,
     tp_min_pct: float = 0.3,
 ) -> tuple[float, int, int, float, float, str]:
     """Все прострелы пары, затем D у края и фильтр шума.

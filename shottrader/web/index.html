@@ -176,11 +176,33 @@
           <button class="danger" id="panicBtn">Panic</button>
         </div>
         <button id="resumeBtn" style="margin-top:6px">Снять авто-стоп</button>
+        <h2 style="margin-top:14px">Подтверждения</h2>
+        <label>Минимум прострелов для ордера</label>
+        <input id="minFills" type="number" step="1" min="1" value="2" />
+        <div class="muted" id="fillsHint" style="margin:6px 0 8px">
+          Дистанция должна подтвердиться столько раз, иначе пару в план не берём. Было 3, сейчас 2.
+        </div>
+        <button class="primary" id="saveFillsBtn">Применить порог</button>
         <h2 style="margin-top:14px">Сессия</h2>
         <div class="kpi"><div class="l">Нереализ.</div><div class="v" id="unreal">0.00$</div></div>
         <div class="kpi"><div class="l">В сделках</div><div class="v" id="inTrade">0$</div></div>
         <div class="kpi"><div class="l">1 час · сделки / PnL</div><div class="v" id="hour">0 / 0$</div></div>
         <div class="kpi"><div class="l">Сегодня · сделки / PnL</div><div class="v" id="day">0 / 0$</div></div>
+        <h2 style="margin-top:14px">Бан пар</h2>
+        <label>Минусов до бана</label>
+        <input id="banLoseLimit" type="number" step="1" min="1" value="2" />
+        <div class="row2">
+          <div>
+            <label>Окно учёта, ч</label>
+            <input id="banLoseWindow" type="number" step="0.1" min="0.1" value="3" />
+          </div>
+          <div>
+            <label>Бан, ч</label>
+            <input id="banHours" type="number" step="0.1" min="0.1" value="3" />
+          </div>
+        </div>
+        <div class="muted" id="banRule" style="margin:8px 0 6px">2 минуса за 3ч → бан 3ч</div>
+        <div id="banList" class="muted">нет</div>
         <button type="button" class="log-toggle" id="logToggle" aria-expanded="false">
           <span>Логи</span><span class="arrow">▸</span>
         </button>
@@ -344,7 +366,10 @@
       return `<td class="${cls}">${fmt(n, 3)}%</td>`;
     }
 
-    const settingsDirty = { orderSize20: false, orderSize50: false, autostop: false, minDist: false, minV2Gap: false };
+    const settingsDirty = {
+      orderSize20: false, orderSize50: false, autostop: false, minDist: false, minV2Gap: false,
+      banLoseLimit: false, banLoseWindow: false, banHours: false, minFills: false,
+    };
     let settingsLocked = false;
     let settingsBusy = false;
     let settingsHydrated = false;
@@ -364,6 +389,10 @@
         autostop_usd: Number(document.getElementById("autostop").value),
         min_order_distance: Number(document.getElementById("minDist").value),
         min_v2_gap: Number(document.getElementById("minV2Gap").value),
+        pair_lose_limit: Number(document.getElementById("banLoseLimit").value),
+        pair_lose_window_hours: Number(document.getElementById("banLoseWindow").value),
+        pair_ban_hours: Number(document.getElementById("banHours").value),
+        min_fills: Number(document.getElementById("minFills").value),
         trade_long: document.getElementById("tradeLong").checked,
         trade_short: document.getElementById("tradeShort").checked,
       };
@@ -376,6 +405,10 @@
       if (data.autostop_usd != null) document.getElementById("autostop").value = data.autostop_usd;
       if (data.min_order_distance != null) document.getElementById("minDist").value = data.min_order_distance;
       if (data.min_v2_gap != null) document.getElementById("minV2Gap").value = data.min_v2_gap;
+      if (data.pair_lose_limit != null) document.getElementById("banLoseLimit").value = data.pair_lose_limit;
+      if (data.pair_lose_window_hours != null) document.getElementById("banLoseWindow").value = data.pair_lose_window_hours;
+      if (data.pair_ban_hours != null) document.getElementById("banHours").value = data.pair_ban_hours;
+      if (data.min_fills != null) document.getElementById("minFills").value = data.min_fills;
       if (data.trade_long != null) document.getElementById("tradeLong").checked = !!data.trade_long;
       if (data.trade_short != null) document.getElementById("tradeShort").checked = !!data.trade_short;
       settingsDirty.orderSize20 = false;
@@ -383,12 +416,20 @@
       settingsDirty.autostop = false;
       settingsDirty.minDist = false;
       settingsDirty.minV2Gap = false;
+      settingsDirty.banLoseLimit = false;
+      settingsDirty.banLoseWindow = false;
+      settingsDirty.banHours = false;
+      settingsDirty.minFills = false;
       if (state) {
         if (data.order_size_x20 != null) state.order_size_x20 = data.order_size_x20;
         if (data.order_size_x50 != null) state.order_size_x50 = data.order_size_x50;
         if (data.autostop_usd != null) state.autostop_usd = data.autostop_usd;
         if (data.min_order_distance != null) state.min_order_distance = data.min_order_distance;
         if (data.min_v2_gap != null) state.min_v2_gap = data.min_v2_gap;
+        if (data.pair_lose_limit != null) state.pair_lose_limit = data.pair_lose_limit;
+        if (data.pair_lose_window_hours != null) state.pair_lose_window_hours = data.pair_lose_window_hours;
+        if (data.pair_ban_hours != null) state.pair_ban_hours = data.pair_ban_hours;
+        if (data.min_fills != null) state.min_fills = data.min_fills;
         if (data.trade_long != null) state.trade_long = data.trade_long;
         if (data.trade_short != null) state.trade_short = data.trade_short;
       }
@@ -415,6 +456,22 @@
       }
       if (!Number.isFinite(payload.min_v2_gap) || payload.min_v2_gap < 0.05) {
         alert("Мин. зазор V2 должен быть ≥ 0.05");
+        return;
+      }
+      if (!Number.isFinite(payload.pair_lose_limit) || payload.pair_lose_limit < 1) {
+        alert("Минусов до бана должно быть ≥ 1");
+        return;
+      }
+      if (!Number.isFinite(payload.pair_lose_window_hours) || payload.pair_lose_window_hours < 0.1) {
+        alert("Окно учёта минусов должно быть ≥ 0.1 ч");
+        return;
+      }
+      if (!Number.isFinite(payload.pair_ban_hours) || payload.pair_ban_hours < 0.1) {
+        alert("Время бана должно быть ≥ 0.1 ч");
+        return;
+      }
+      if (!Number.isFinite(payload.min_fills) || payload.min_fills < 1) {
+        alert("Минимум подтверждений должен быть ≥ 1");
         return;
       }
       settingsBusy = true;
@@ -453,6 +510,10 @@
       syncInput("autostop", state.autostop_usd);
       syncInput("minDist", state.min_order_distance);
       syncInput("minV2Gap", state.min_v2_gap);
+      syncInput("banLoseLimit", state.pair_lose_limit);
+      syncInput("banLoseWindow", state.pair_lose_window_hours);
+      syncInput("banHours", state.pair_ban_hours);
+      syncInput("minFills", state.min_fills);
       if (!document.getElementById("tradeLong").matches(":focus")) {
         document.getElementById("tradeLong").checked = state.trade_long !== false;
       }
@@ -474,6 +535,21 @@
       document.getElementById("hour").textContent = `${state.hour.trades} (+${state.hour.plus || 0}/−${state.hour.minus || 0}) / ${money(state.hour.pnl_usd)}`;
       const td = state.today || state.day || {};
       document.getElementById("day").textContent = `${td.trades || 0} (+${td.plus || 0}/−${td.minus || 0}) / ${money(td.pnl_usd)}`;
+      const loseN = Number(state.pair_lose_limit || 2);
+      const loseH = Number(state.pair_lose_window_hours || 3);
+      const banH = Number(state.pair_ban_hours || 3);
+      document.getElementById("banRule").textContent =
+        `${loseN} минуса за ${loseH}ч → бан ${banH}ч · не следим`;
+      const fillsN = Number(state.min_fills || 2);
+      document.getElementById("fillsHint").textContent =
+        `Дистанция должна подтвердиться ${fillsN} раз, иначе пару в план не берём.`;
+      const bans = state.bans || [];
+      document.getElementById("banList").innerHTML = bans.length
+        ? bans.map((b) => {
+            const name = String(b.symbol || "").replace("-USDT-SWAP", "");
+            return `<div class="down" style="margin-bottom:3px">${name} · ещё ${b.left_min} мин</div>`;
+          }).join("")
+        : `<span class="muted">нет</span>`;
       document.getElementById("boardMeta").textContent =
         `follow ${(state.follow_delay_ms || 1000) / 1000} с · hold ${(state.hold_ms || 300) / 1000} с`;
       document.getElementById("tickAge").textContent = new Date().toLocaleTimeString();
@@ -546,12 +622,21 @@
         });
       }
 
-      document.getElementById("plan").innerHTML = (state.plan || []).slice(0, 20).map((p) => `
-        <tr><td>${(p.symbol || "").split("-")[0]} <span class="muted">x${p.lever || "—"}</span></td>
+      const banSet = new Set((state.bans || []).map((b) => String(b.symbol || "").toUpperCase()));
+      const banLeft = Object.fromEntries((state.bans || []).map((b) => [String(b.symbol || "").toUpperCase(), b.left_min]));
+      document.getElementById("plan").innerHTML = (state.plan || []).slice(0, 20).map((p) => {
+        const sym = String(p.symbol || "").toUpperCase();
+        const banned = banSet.has(sym);
+        const name = (p.symbol || "").split("-")[0];
+        const tag = banned
+          ? ` <span class="down">бан ${banLeft[sym] || 0}м</span>`
+          : ` <span class="muted">x${p.lever || "—"}</span>`;
+        return `<tr${banned ? ' class="muted"' : ""}><td>${name}${tag}</td>
         <td class="up">${Number(p.buy_pct) > 0 ? fmt(p.buy_pct) : "—"}</td>
         <td class="up">${Number(p.buy_v2_pct) > 0 ? fmt(p.buy_v2_pct) : "—"}</td>
         <td class="down">${Number(p.sell_pct) > 0 ? fmt(p.sell_pct) : (Number(p.recommend_pct) > 0 && !p.buy_pct ? fmt(p.recommend_pct) : "—")}</td>
-        <td class="down">${Number(p.sell_v2_pct) > 0 ? fmt(p.sell_v2_pct) : "—"}</td></tr>`).join("")
+        <td class="down">${Number(p.sell_v2_pct) > 0 ? fmt(p.sell_v2_pct) : "—"}</td></tr>`;
+      }).join("")
         || `<tr><td colspan="5" class="muted">пустой план</td></tr>`;
       renderDeals();
       document.getElementById("log").innerHTML = [...(state.log || [])].reverse().map((l) => `<div>${l}</div>`).join("");
@@ -663,11 +748,15 @@
       if (settingsDirty.autostop) next.autostop_usd = Number(document.getElementById("autostop").value);
       if (settingsDirty.minDist) next.min_order_distance = Number(document.getElementById("minDist").value);
       if (settingsDirty.minV2Gap) next.min_v2_gap = Number(document.getElementById("minV2Gap").value);
+      if (settingsDirty.banLoseLimit) next.pair_lose_limit = Number(document.getElementById("banLoseLimit").value);
+      if (settingsDirty.banLoseWindow) next.pair_lose_window_hours = Number(document.getElementById("banLoseWindow").value);
+      if (settingsDirty.banHours) next.pair_ban_hours = Number(document.getElementById("banHours").value);
+      if (settingsDirty.minFills) next.min_fills = Number(document.getElementById("minFills").value);
       state = next;
       render();
     }
 
-    ["orderSize20", "orderSize50", "autostop", "minDist", "minV2Gap"].forEach((id) => {
+    ["orderSize20", "orderSize50", "autostop", "minDist", "minV2Gap", "banLoseLimit", "banLoseWindow", "banHours", "minFills"].forEach((id) => {
       const el = document.getElementById(id);
       el.addEventListener("input", () => { settingsDirty[id] = true; });
       el.addEventListener("keydown", (ev) => {
@@ -678,6 +767,7 @@
       });
     });
     document.getElementById("saveBtn").onclick = () => saveSettings();
+    document.getElementById("saveFillsBtn").onclick = () => saveSettings();
     ["tradeLong", "tradeShort"].forEach((id) => {
       document.getElementById(id).addEventListener("change", () => saveSettings());
     });

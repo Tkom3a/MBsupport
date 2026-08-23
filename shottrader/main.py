@@ -37,6 +37,14 @@ class ShotTrader:
         self._last_hour_report = 0
         self._last_day_report = 0
 
+    def _refresh_desired(self) -> None:
+        """Смотрим только живые клоны. Забаненные пары не держим на WS."""
+        wanted = {str(sym).upper() for sym in self.engine.algos if not self.engine.is_banned(sym)}
+        view = str(self.engine.view_symbol or "").upper()
+        self._desired = set(wanted)
+        if view and view not in wanted:
+            self.engine.view_symbol = next(iter(wanted), "")
+
     async def run(self) -> None:
         timeout = aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=20)
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -60,6 +68,7 @@ class ShotTrader:
                 self.engine.emulate = True
                 self.engine.note("режим эмуляции (ордера на биржу не уходят)")
             runner = await self._start_web()
+            await self._push_min_fills()
             try:
                 await asyncio.gather(
                     self._plan_loop(),
@@ -171,17 +180,32 @@ class ShotTrader:
             if "min_v2_gap" in body and body["min_v2_gap"] not in (None, ""):
                 self.engine.min_v2_gap = max(0.05, float(body["min_v2_gap"]))
                 self.cfg.min_v2_gap = self.engine.min_v2_gap
+            if "pair_lose_limit" in body and body["pair_lose_limit"] not in (None, ""):
+                self.engine.pair_lose_limit = max(1, int(float(body["pair_lose_limit"])))
+                self.cfg.pair_lose_limit = self.engine.pair_lose_limit
+            if "pair_lose_window_hours" in body and body["pair_lose_window_hours"] not in (None, ""):
+                self.engine.pair_lose_window_hours = max(0.1, float(body["pair_lose_window_hours"]))
+                self.cfg.pair_lose_window_hours = self.engine.pair_lose_window_hours
+            if "pair_ban_hours" in body and body["pair_ban_hours"] not in (None, ""):
+                self.engine.pair_ban_hours = max(0.1, float(body["pair_ban_hours"]))
+                self.cfg.pair_ban_hours = self.engine.pair_ban_hours
+            if "min_fills" in body and body["min_fills"] not in (None, ""):
+                self.engine.min_fills = max(1, int(float(body["min_fills"])))
+                self.cfg.min_fills = self.engine.min_fills
         except (TypeError, ValueError) as exc:
             return web.json_response({"ok": False, "error": f"неверное значение: {exc}"}, status=400)
         if "shotcore_url" in body:
             self._apply_shotcore_url(str(body.get("shotcore_url") or ""))
         self.engine.apply_runtime_settings()
+        await self._push_min_fills()
         self.engine.note(
             f"настройки: x20={self.engine.order_size_x20:g} x50={self.engine.order_size_x50:g} "
             f"autostop={self.engine.autostop_usd:g}$ "
             f"long={'on' if self.engine.trade_long else 'off'} "
             f"short={'on' if self.engine.trade_short else 'off'} "
-            f"minD={self.engine.min_order_distance:g}% v2gap={self.engine.min_v2_gap:g}%"
+            f"minD={self.engine.min_order_distance:g}% v2gap={self.engine.min_v2_gap:g}% "
+            f"бан={self.engine.pair_lose_limit} минуса / {self.engine.pair_lose_window_hours:g}ч "
+            f"→ {self.engine.pair_ban_hours:g}ч  подтверждений={self.engine.min_fills}"
         )
         return web.json_response(
             {
@@ -195,6 +219,10 @@ class ShotTrader:
                 "trade_short": self.engine.trade_short,
                 "min_order_distance": self.engine.min_order_distance,
                 "min_v2_gap": self.engine.min_v2_gap,
+                "pair_lose_limit": self.engine.pair_lose_limit,
+                "pair_lose_window_hours": self.engine.pair_lose_window_hours,
+                "pair_ban_hours": self.engine.pair_ban_hours,
+                "min_fills": self.engine.min_fills,
             }
         )
 
@@ -223,9 +251,8 @@ class ShotTrader:
     async def _view(self, request: web.Request) -> web.Response:
         body = await request.json()
         symbol = str(body.get("symbol") or "").upper()
-        if symbol:
+        if symbol and not self.engine.is_banned(symbol):
             self.engine.view_symbol = symbol
-            self._desired.add(symbol)
         return web.json_response({"ok": True})
 
     async def _resume(self, _request: web.Request) -> web.Response:
@@ -257,9 +284,7 @@ class ShotTrader:
                 started = self.engine.sync_plan(pairs)
                 self.engine.plan_error = ""
                 self.engine.plan_updated_ts = int(time.time() * 1000)
-                for sym in list(self.engine.algos) + [self.engine.view_symbol]:
-                    if sym:
-                        self._desired.add(sym.upper())
+                self._refresh_desired()
                 if started:
                     self.engine.note(f"новые клоны: {', '.join(started)}")
                 elif not pairs:
@@ -274,13 +299,40 @@ class ShotTrader:
                 await asyncio.sleep(fail_sleep)
                 fail_sleep = min(60, fail_sleep + 5)
 
-    async def _fetch_plan(self) -> dict[str, Any]:
-        assert self.session is not None
-        params = {"lookback": str(self.cfg.lookback_min)}
+    def _shotcore_headers(self) -> dict[str, str]:
         headers: dict[str, str] = {}
         token = (self.cfg.shotcore_token or "").strip()
         if token:
             headers["X-Shot-Token"] = token
+        return headers
+
+    async def _push_min_fills(self) -> None:
+        if self.session is None:
+            return
+        url = f"{self.cfg.shotcore_url}/api/algo"
+        try:
+            async with self.session.post(
+                url,
+                json={"min_fills": int(self.engine.min_fills)},
+                headers=self._shotcore_headers(),
+                timeout=aiohttp.ClientTimeout(total=8),
+            ) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    self.engine.note(f"порог подтверждений → ShotCore: {resp.status} {text[:120]}")
+                    return
+                data = await resp.json()
+                got = data.get("min_fills")
+                self.engine.note(f"порог подтверждений: {self.engine.min_fills} (ShotCore {got})")
+        except Exception as exc:
+            self.engine.note(f"порог подтверждений не ушёл в ShotCore: {exc}")
+
+    async def _fetch_plan(self) -> dict[str, Any]:
+        assert self.session is not None
+        params = {"lookback": str(self.cfg.lookback_min), "min_fills": str(self.engine.min_fills)}
+        headers = self._shotcore_headers()
+        token = (self.cfg.shotcore_token or "").strip()
+        if token:
             params["token"] = token
         url = f"{self.cfg.shotcore_url}/api/mt-plan?{urlencode(params)}"
         async with self.session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=12)) as resp:
@@ -308,6 +360,7 @@ class ShotTrader:
         while True:
             try:
                 await self.engine.follow_once()
+                self._refresh_desired()
             except Exception as exc:
                 log.debug("follow: %s", exc)
             await asyncio.sleep(0.25)

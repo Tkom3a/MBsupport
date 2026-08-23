@@ -197,6 +197,13 @@ class ShotEngine:
         self.autostop_usd = cfg.autostop_usd
         self.min_order_distance = cfg.min_order_distance
         self.min_v2_gap = cfg.min_v2_gap
+        self.pair_lose_limit = cfg.pair_lose_limit
+        self.pair_lose_window_hours = cfg.pair_lose_window_hours
+        self.pair_ban_hours = cfg.pair_ban_hours
+        self.min_fills = cfg.min_fills
+        self.bans: dict[str, int] = {}
+        self.ban_until_hist: dict[str, int] = {}
+        self.bans_path = self.data_dir / "pair_bans.json"
         self.halted = False
         self.halt_reason = ""
         self.trade_long = True
@@ -209,6 +216,7 @@ class ShotEngine:
         self._load_journal()
         self._rebuild_days()
         self._load_runtime()
+        self._load_bans()
 
     def _load_runtime(self) -> None:
         if not self.runtime_path.is_file():
@@ -240,6 +248,14 @@ class ShotEngine:
             self.min_order_distance = max(0.0, float(raw["min_order_distance"]))
         if raw.get("min_v2_gap") not in (None, ""):
             self.min_v2_gap = max(0.05, float(raw["min_v2_gap"]))
+        if raw.get("pair_lose_limit") not in (None, ""):
+            self.pair_lose_limit = max(1, int(float(raw["pair_lose_limit"])))
+        if raw.get("pair_lose_window_hours") not in (None, ""):
+            self.pair_lose_window_hours = max(0.1, float(raw["pair_lose_window_hours"]))
+        if raw.get("pair_ban_hours") not in (None, ""):
+            self.pair_ban_hours = max(0.1, float(raw["pair_ban_hours"]))
+        if raw.get("min_fills") not in (None, ""):
+            self.min_fills = max(1, int(float(raw["min_fills"])))
 
     def save_runtime(self) -> None:
         payload = {
@@ -250,10 +266,95 @@ class ShotEngine:
             "autostop_usd": self.autostop_usd,
             "min_order_distance": self.min_order_distance,
             "min_v2_gap": self.min_v2_gap,
+            "pair_lose_limit": self.pair_lose_limit,
+            "pair_lose_window_hours": self.pair_lose_window_hours,
+            "pair_ban_hours": self.pair_ban_hours,
+            "min_fills": self.min_fills,
         }
         tmp = self.runtime_path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(self.runtime_path)
+
+    def _load_bans(self) -> None:
+        if not self.bans_path.is_file():
+            return
+        try:
+            raw = json.loads(self.bans_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        now = _now_ms()
+        for key, val in (raw.get("bans") or {}).items():
+            until = int(val or 0)
+            if until > now:
+                self.bans[str(key).upper()] = until
+            if until > 0:
+                self.ban_until_hist[str(key).upper()] = until
+        for key, val in (raw.get("hist") or {}).items():
+            self.ban_until_hist[str(key).upper()] = max(int(val or 0), self.ban_until_hist.get(str(key).upper(), 0))
+
+    def _save_bans(self) -> None:
+        payload = {"bans": self.bans, "hist": self.ban_until_hist}
+        tmp = self.bans_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(self.bans_path)
+
+    def _prune_bans(self) -> list[str]:
+        now = _now_ms()
+        expired = [sym for sym, until in self.bans.items() if now >= until]
+        for sym in expired:
+            self.ban_until_hist[sym] = max(self.ban_until_hist.get(sym, 0), self.bans.pop(sym))
+            self.note(f"{sym} бан истёк — снова отслеживаем")
+        if expired:
+            self._save_bans()
+        return expired
+
+    def is_banned(self, symbol: str) -> bool:
+        until = self.bans.get(str(symbol or "").upper(), 0)
+        return until > _now_ms()
+
+    def public_bans(self) -> list[dict[str, Any]]:
+        now = _now_ms()
+        rows = []
+        for symbol, until in sorted(self.bans.items()):
+            if until <= now:
+                continue
+            left = max(0, int((until - now) / 60000))
+            rows.append({"symbol": symbol, "until_ts": until, "left_min": left})
+        return rows
+
+    def _recent_losses(self, symbol: str) -> int:
+        now = _now_ms()
+        window = int(self.pair_lose_window_hours * 3600 * 1000)
+        cutoff = now - window
+        last_ban_end = int(self.ban_until_hist.get(symbol, 0) or 0)
+        if last_ban_end and now >= last_ban_end:
+            cutoff = max(cutoff, last_ban_end)
+        n = 0
+        for row in getattr(self, "_journal_all", list(self.journal)):
+            if str(row.get("symbol") or "").upper() != symbol:
+                continue
+            if int(row.get("ts") or 0) < cutoff:
+                continue
+            if float(row.get("pnl_usd") or 0) <= 0:
+                n += 1
+        return n
+
+    def _maybe_pair_ban(self, symbol: str) -> bool:
+        symbol = str(symbol or "").upper()
+        if not symbol or self.is_banned(symbol):
+            return False
+        if self._recent_losses(symbol) < self.pair_lose_limit:
+            return False
+        until = _now_ms() + int(self.pair_ban_hours * 3600 * 1000)
+        self.bans[symbol] = until
+        self.ban_until_hist[symbol] = until
+        self._save_bans()
+        self.note(
+            f"БАН {symbol}: {self.pair_lose_limit} минуса за {self.pair_lose_window_hours:g}ч "
+            f"— не следим {self.pair_ban_hours:g}ч"
+        )
+        self._kill(symbol, "pair-ban")
+        return True
 
     def _filter_sides(self, sides: Sides) -> Sides:
         if not self.trade_long:
@@ -453,6 +554,8 @@ class ShotEngine:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     def on_trade(self, symbol: str, ts: int, price: float, qty: float, side: str) -> None:
+        if self.bans.get(str(symbol or "").upper(), 0) > _now_ms():
+            return
         self.tapes[symbol].push(ts, price, side, qty)
         if self.halted:
             return
@@ -465,16 +568,28 @@ class ShotEngine:
 
     def sync_plan(self, pairs: list[dict[str, Any]]) -> list[str]:
         self.plan_pairs = pairs
+        self._prune_bans()
         wanted: dict[str, dict[str, Any]] = {}
         for pair in pairs:
             symbol = str(pair.get("symbol") or "").upper()
+            if not symbol or self.is_banned(symbol):
+                continue
             sides = self._plan_sides(pair)
-            if not symbol or not sides.any():
+            if not sides.any():
+                continue
+            score_n = int(pair.get("score_plus") or 0) + int(pair.get("score_minus") or 0)
+            if score_n and score_n < self.min_fills:
+                continue
+            if self._recent_losses(symbol) >= self.pair_lose_limit:
+                self._maybe_pair_ban(symbol)
                 continue
             wanted[symbol] = pair
         started: list[str] = []
         now = _now_ms()
         for symbol, algo in list(self.algos.items()):
+            if self.is_banned(symbol):
+                self._kill(symbol, "pair-ban")
+                continue
             if now >= algo.until_ts:
                 self.note(f"{symbol} 3ч истекли — снимаю")
                 self._kill(symbol, "expired")
@@ -510,6 +625,8 @@ class ShotEngine:
 
     def _start(self, pair: dict[str, Any]) -> None:
         symbol = str(pair.get("symbol") or "").upper()
+        if not symbol or self.is_banned(symbol):
+            return
         sides = self._plan_sides(pair)
         if not sides.any():
             return
@@ -575,6 +692,9 @@ class ShotEngine:
             loop.create_task(self.broker.close_market(symbol, close_side, algo.qty))
 
     async def follow_once(self) -> None:
+        expired = self._prune_bans()
+        if expired and self.plan_pairs and not self.halted:
+            self.sync_plan(self.plan_pairs)
         if self.halted:
             return
         now = _now_ms()
@@ -784,6 +904,8 @@ class ShotEngine:
             algo.fill_ts = 0
             algo.buy_px = 0.0
             algo.sell_px = 0.0
+        if pnl <= 0:
+            self._maybe_pair_ban(algo.symbol)
         if pnl <= -self.autostop_usd:
             self.emergency(f"сделка {algo.symbol} {pnl:.2f}$ ≤ -{self.autostop_usd:g}$")
 
@@ -1052,6 +1174,11 @@ class ShotEngine:
             "trade_short": self.trade_short,
             "min_order_distance": self.min_order_distance,
             "min_v2_gap": self.min_v2_gap,
+            "pair_lose_limit": self.pair_lose_limit,
+            "pair_lose_window_hours": self.pair_lose_window_hours,
+            "pair_ban_hours": self.pair_ban_hours,
+            "min_fills": self.min_fills,
+            "bans": self.public_bans(),
             "follow_delay_ms": self.cfg.follow_delay_ms,
             "hold_ms": self.cfg.hold_ms,
             "run_hours": self.cfg.run_hours,

@@ -52,7 +52,7 @@ class ShotConfig:
     suggest_inside_pct: float = 0.05
     suggest_inside_max_pct: float = 0.10
     min_win_pct: float = 70.0
-    min_fills: int = 3
+    min_fills: int = 2
 
 
 @dataclass

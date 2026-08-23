@@ -218,7 +218,8 @@ def _status_lines(cli: ShotClient, state: dict[str, Any], ping: dict[str, str]) 
         (
         f"size x20={state.get('order_size_x20')}  x50={state.get('order_size_x50')}  "
         f"autostop={state.get('autostop_usd')}$  "
-        f"minD={state.get('min_order_distance', 0.85)}%  v2gap={state.get('min_v2_gap', 0.3)}%"
+        f"minD={state.get('min_order_distance', 0.85)}%  v2gap={state.get('min_v2_gap', 0.3)}%  "
+        f"подтверждений={state.get('min_fills', 2)}"
         ),
         (
             f"час    сделок {hour.get('trades', 0)}  "
@@ -235,6 +236,17 @@ def _status_lines(cli: ShotClient, state: dict[str, Any], ping: dict[str, str]) 
         ),
         f"клонов {len(state.get('markets') or [])}  план {len(state.get('plan') or [])} пар",
     ]
+    bans = state.get("bans") or []
+    if bans:
+        lines.append(
+            "бан  "
+            + "  ".join(f"{str(b.get('symbol') or '').split('-')[0]} {b.get('left_min')}м" for b in bans)
+        )
+    else:
+        lose_n = state.get("pair_lose_limit", 2)
+        lose_h = state.get("pair_lose_window_hours", 3)
+        ban_h = state.get("pair_ban_hours", 3)
+        lines.append(f"бан  нет  ({lose_n} минуса / {lose_h}ч → {ban_h}ч)")
     if state.get("plan_error"):
         lines.append(f"план: {state['plan_error']}")
     return lines
@@ -382,13 +394,23 @@ def apply_set(cli: ShotClient, key: str, value: str) -> None:
         "min_dist": "min_order_distance",
         "v2gap": "min_v2_gap",
         "v2_gap": "min_v2_gap",
+        "banloses": "pair_lose_limit",
+        "ban_loses": "pair_lose_limit",
+        "banwindow": "pair_lose_window_hours",
+        "ban_window": "pair_lose_window_hours",
+        "banhours": "pair_ban_hours",
+        "ban_hours": "pair_ban_hours",
+        "minfills": "min_fills",
+        "min_fills": "min_fills",
+        "fills": "min_fills",
         "core": "shotcore_url",
         "shotcore": "shotcore_url",
     }
     field = mapping.get(key)
     if not field:
         raise RuntimeError(
-            f"неизвестный ключ {key}. доступны: long, short, size20, size50, autostop, mindist, v2gap, core"
+            f"неизвестный ключ {key}. доступны: long, short, size20, size50, autostop, "
+            "mindist, v2gap, banloses, banwindow, banhours, minfills, core"
         )
     if field == "shotcore_url":
         res = cli.trader_post("/api/shotcore", {"url": value})
@@ -405,7 +427,10 @@ def apply_set(cli: ShotClient, key: str, value: str) -> None:
         f"short={'on' if res.get('trade_short', True) else 'off'}  "
         f"x20={res.get('order_size_x20')}  x50={res.get('order_size_x50')}  "
         f"autostop={res.get('autostop_usd')}  "
-        f"minD={res.get('min_order_distance')}  v2gap={res.get('min_v2_gap')}"
+        f"minD={res.get('min_order_distance')}  v2gap={res.get('min_v2_gap')}  "
+        f"бан={res.get('pair_lose_limit')} / {res.get('pair_lose_window_hours')}ч "
+        f"→ {res.get('pair_ban_hours')}ч  "
+        f"подтверждений={res.get('min_fills')}"
     )
 
 

@@ -89,7 +89,13 @@ async def _stats(request: web.Request) -> web.Response:
     lookback = _int(request, "lookback", core.cfg.web.stats_lookback_min)
     direction = str(request.rel_url.query.get("direction") or "")
     only_calm = str(request.rel_url.query.get("btc_calm") or "") in {"1", "true"}
-    payload = core.store.stats(lookback_min=lookback, direction=direction, only_btc_calm=only_calm)
+    min_fills = _opt_int(request, "min_fills")
+    payload = core.store.stats(
+        lookback_min=lookback,
+        direction=direction,
+        only_btc_calm=only_calm,
+        min_fills=min_fills,
+    )
     payload["filters"] = public_filters(core.cfg)
     payload["symbols_watched"] = len(core.active_symbols)
     payload["ws_connections"] = core.feed.connected
@@ -128,6 +134,7 @@ async def _mt_plan(request: web.Request) -> web.Response:
         lookback_min=lookback,
         subscribed=set(core.active_symbols),
         run_hours=core.cfg.output.mt_run_hours,
+        min_fills=_opt_int(request, "min_fills"),
     )
     return _json(plan)
 
@@ -151,6 +158,16 @@ async def _algo_set(request: web.Request) -> web.Response:
         return _json({"ok": False, "error": str(exc)})
     payload["ok"] = True
     return _json(payload)
+
+
+def _opt_int(request: web.Request, name: str) -> int | None:
+    raw = request.rel_url.query.get(name)
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(float(raw))
+    except ValueError:
+        return None
 
 
 def _int(request: web.Request, name: str, default: int) -> int:
