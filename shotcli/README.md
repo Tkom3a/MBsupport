@@ -102,6 +102,8 @@ python3 -m shotcli set short off
 python3 -m shotcli set size20 15
 python3 -m shotcli set size50 10
 python3 -m shotcli set autostop 8
+python3 -m shotcli set mindist 0.85
+python3 -m shotcli set v2gap 0.3
 ```
 
 `off` на long или short сразу перестаёт ставить ордера в эту сторону (как галочка на веб-странице).

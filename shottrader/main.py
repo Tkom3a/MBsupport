@@ -165,6 +165,12 @@ class ShotTrader:
             if "trade_short" in body:
                 self.engine.trade_short = bool(body["trade_short"])
                 self.cfg.trade_short = self.engine.trade_short
+            if "min_order_distance" in body and body["min_order_distance"] not in (None, ""):
+                self.engine.min_order_distance = max(0.0, float(body["min_order_distance"]))
+                self.cfg.min_order_distance = self.engine.min_order_distance
+            if "min_v2_gap" in body and body["min_v2_gap"] not in (None, ""):
+                self.engine.min_v2_gap = max(0.05, float(body["min_v2_gap"]))
+                self.cfg.min_v2_gap = self.engine.min_v2_gap
         except (TypeError, ValueError) as exc:
             return web.json_response({"ok": False, "error": f"неверное значение: {exc}"}, status=400)
         if "shotcore_url" in body:
@@ -174,7 +180,8 @@ class ShotTrader:
             f"настройки: x20={self.engine.order_size_x20:g} x50={self.engine.order_size_x50:g} "
             f"autostop={self.engine.autostop_usd:g}$ "
             f"long={'on' if self.engine.trade_long else 'off'} "
-            f"short={'on' if self.engine.trade_short else 'off'}"
+            f"short={'on' if self.engine.trade_short else 'off'} "
+            f"minD={self.engine.min_order_distance:g}% v2gap={self.engine.min_v2_gap:g}%"
         )
         return web.json_response(
             {
@@ -186,6 +193,8 @@ class ShotTrader:
                 "autostop_usd": self.engine.autostop_usd,
                 "trade_long": self.engine.trade_long,
                 "trade_short": self.engine.trade_short,
+                "min_order_distance": self.engine.min_order_distance,
+                "min_v2_gap": self.engine.min_v2_gap,
             }
         )
 

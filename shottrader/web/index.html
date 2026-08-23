@@ -163,6 +163,11 @@
         <input id="orderSize50" type="number" step="1" min="1" value="10" />
         <label>Авто-стоп, $</label>
         <input id="autostop" type="number" step="0.5" min="0.5" value="10" />
+        <h2 style="margin-top:14px">Дистанции</h2>
+        <label>Мин. дистанция ордера, %</label>
+        <input id="minDist" type="number" step="0.01" min="0" value="0.85" />
+        <label>Мин. зазор V2 от первого, %</label>
+        <input id="minV2Gap" type="number" step="0.01" min="0.05" value="0.30" />
         <h2 style="margin-top:14px">Направление</h2>
         <label class="dir-check"><input id="tradeLong" type="checkbox" checked /> Ставить лонги (BUY)</label>
         <label class="dir-check"><input id="tradeShort" type="checkbox" checked /> Ставить шорты (SHORT)</label>
@@ -339,7 +344,7 @@
       return `<td class="${cls}">${fmt(n, 3)}%</td>`;
     }
 
-    const settingsDirty = { orderSize20: false, orderSize50: false, autostop: false };
+    const settingsDirty = { orderSize20: false, orderSize50: false, autostop: false, minDist: false, minV2Gap: false };
     let settingsLocked = false;
     let settingsBusy = false;
     let settingsHydrated = false;
@@ -357,6 +362,8 @@
         order_size_x20: Number(document.getElementById("orderSize20").value),
         order_size_x50: Number(document.getElementById("orderSize50").value),
         autostop_usd: Number(document.getElementById("autostop").value),
+        min_order_distance: Number(document.getElementById("minDist").value),
+        min_v2_gap: Number(document.getElementById("minV2Gap").value),
         trade_long: document.getElementById("tradeLong").checked,
         trade_short: document.getElementById("tradeShort").checked,
       };
@@ -367,15 +374,21 @@
       if (data.order_size_x20 != null) document.getElementById("orderSize20").value = data.order_size_x20;
       if (data.order_size_x50 != null) document.getElementById("orderSize50").value = data.order_size_x50;
       if (data.autostop_usd != null) document.getElementById("autostop").value = data.autostop_usd;
+      if (data.min_order_distance != null) document.getElementById("minDist").value = data.min_order_distance;
+      if (data.min_v2_gap != null) document.getElementById("minV2Gap").value = data.min_v2_gap;
       if (data.trade_long != null) document.getElementById("tradeLong").checked = !!data.trade_long;
       if (data.trade_short != null) document.getElementById("tradeShort").checked = !!data.trade_short;
       settingsDirty.orderSize20 = false;
       settingsDirty.orderSize50 = false;
       settingsDirty.autostop = false;
+      settingsDirty.minDist = false;
+      settingsDirty.minV2Gap = false;
       if (state) {
         if (data.order_size_x20 != null) state.order_size_x20 = data.order_size_x20;
         if (data.order_size_x50 != null) state.order_size_x50 = data.order_size_x50;
         if (data.autostop_usd != null) state.autostop_usd = data.autostop_usd;
+        if (data.min_order_distance != null) state.min_order_distance = data.min_order_distance;
+        if (data.min_v2_gap != null) state.min_v2_gap = data.min_v2_gap;
         if (data.trade_long != null) state.trade_long = data.trade_long;
         if (data.trade_short != null) state.trade_short = data.trade_short;
       }
@@ -394,6 +407,14 @@
       }
       if (!Number.isFinite(payload.autostop_usd) || payload.autostop_usd < 0.5) {
         alert("Авто-стоп должен быть ≥ 0.5");
+        return;
+      }
+      if (!Number.isFinite(payload.min_order_distance) || payload.min_order_distance < 0) {
+        alert("Мин. дистанция ордера должна быть ≥ 0");
+        return;
+      }
+      if (!Number.isFinite(payload.min_v2_gap) || payload.min_v2_gap < 0.05) {
+        alert("Мин. зазор V2 должен быть ≥ 0.05");
         return;
       }
       settingsBusy = true;
@@ -430,6 +451,8 @@
       syncInput("orderSize20", state.order_size_x20);
       syncInput("orderSize50", state.order_size_x50);
       syncInput("autostop", state.autostop_usd);
+      syncInput("minDist", state.min_order_distance);
+      syncInput("minV2Gap", state.min_v2_gap);
       if (!document.getElementById("tradeLong").matches(":focus")) {
         document.getElementById("tradeLong").checked = state.trade_long !== false;
       }
@@ -638,11 +661,13 @@
       if (settingsDirty.orderSize20) next.order_size_x20 = Number(document.getElementById("orderSize20").value);
       if (settingsDirty.orderSize50) next.order_size_x50 = Number(document.getElementById("orderSize50").value);
       if (settingsDirty.autostop) next.autostop_usd = Number(document.getElementById("autostop").value);
+      if (settingsDirty.minDist) next.min_order_distance = Number(document.getElementById("minDist").value);
+      if (settingsDirty.minV2Gap) next.min_v2_gap = Number(document.getElementById("minV2Gap").value);
       state = next;
       render();
     }
 
-    ["orderSize20", "orderSize50", "autostop"].forEach((id) => {
+    ["orderSize20", "orderSize50", "autostop", "minDist", "minV2Gap"].forEach((id) => {
       const el = document.getElementById(id);
       el.addEventListener("input", () => { settingsDirty[id] = true; });
       el.addEventListener("keydown", (ev) => {

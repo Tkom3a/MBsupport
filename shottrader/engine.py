@@ -103,7 +103,7 @@ class Sides:
     sell_v2_tp: float = 0.0
 
     def any(self) -> bool:
-        return self.buy_d > 0 or self.sell_d > 0
+        return self.buy_d > 0 or self.sell_d > 0 or self.buy_v2 > 0 or self.sell_v2 > 0
 
     def fingerprint(self) -> str:
         return (
@@ -133,16 +133,6 @@ def _sides_from_pair(pair: dict[str, Any]) -> Sides:
     sell_v2 = round(float(pair.get("sell_v2_pct") or 0), 2)
     buy_v2_tp = round(float(pair.get("buy_v2_tp_pct") or buy_tp or 0), 2)
     sell_v2_tp = round(float(pair.get("sell_v2_tp_pct") or sell_tp or 0), 2)
-    if buy_v2 <= buy_d + 0.04 or buy_d <= 0:
-        buy_v2 = 0.0
-        buy_v2_tp = 0.0
-    if sell_v2 <= sell_d + 0.04 or sell_d <= 0:
-        sell_v2 = 0.0
-        sell_v2_tp = 0.0
-    if buy_v2 > 0 and buy_v2_tp + 1e-9 < MIN_TP_PCT:
-        buy_v2_tp = max(buy_tp, MIN_TP_PCT)
-    if sell_v2 > 0 and sell_v2_tp + 1e-9 < MIN_TP_PCT:
-        sell_v2_tp = max(sell_tp, MIN_TP_PCT)
     return Sides(buy_d, buy_tp, sell_d, sell_tp, buy_v2, buy_v2_tp, sell_v2, sell_v2_tp)
 
 
@@ -205,6 +195,8 @@ class ShotEngine:
         self.order_size = cfg.order_size_x50
         self.leverage = cfg.leverage
         self.autostop_usd = cfg.autostop_usd
+        self.min_order_distance = cfg.min_order_distance
+        self.min_v2_gap = cfg.min_v2_gap
         self.halted = False
         self.halt_reason = ""
         self.trade_long = True
@@ -244,6 +236,10 @@ class ShotEngine:
             self.order_size = self.order_size_x50
         if raw.get("autostop_usd"):
             self.autostop_usd = max(0.5, float(raw["autostop_usd"]))
+        if raw.get("min_order_distance") not in (None, ""):
+            self.min_order_distance = max(0.0, float(raw["min_order_distance"]))
+        if raw.get("min_v2_gap") not in (None, ""):
+            self.min_v2_gap = max(0.05, float(raw["min_v2_gap"]))
 
     def save_runtime(self) -> None:
         payload = {
@@ -252,6 +248,8 @@ class ShotEngine:
             "order_size_x20": self.order_size_x20,
             "order_size_x50": self.order_size_x50,
             "autostop_usd": self.autostop_usd,
+            "min_order_distance": self.min_order_distance,
+            "min_v2_gap": self.min_v2_gap,
         }
         tmp = self.runtime_path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -262,6 +260,42 @@ class ShotEngine:
             sides.buy_d = sides.buy_tp = sides.buy_v2 = sides.buy_v2_tp = 0.0
         if not self.trade_short:
             sides.sell_d = sides.sell_tp = sides.sell_v2 = sides.sell_v2_tp = 0.0
+        return sides
+
+    def _plan_sides(self, pair: dict[str, Any]) -> Sides:
+        return self._apply_distance_rules(self._filter_sides(_sides_from_pair(pair)))
+
+    def _apply_distance_rules(self, sides: Sides) -> Sides:
+        """V2 не ближе min_v2_gap к первому; ордера короче min_order_distance не ставим."""
+        gap = max(0.05, round(float(self.min_v2_gap or 0.3), 2))
+        floor = max(0.0, round(float(self.min_order_distance or 0), 2))
+
+        def bump_v2(d: float, v2: float, tp: float, v2_tp: float) -> tuple[float, float]:
+            if d <= 0:
+                return 0.0, 0.0
+            want = round(d + gap, 2)
+            if v2 <= 0 or v2 + 1e-9 < want:
+                v2 = want
+            if v2_tp + 1e-9 < MIN_TP_PCT:
+                v2_tp = max(tp, MIN_TP_PCT)
+            return v2, v2_tp
+
+        if sides.buy_d > 0:
+            sides.buy_v2, sides.buy_v2_tp = bump_v2(sides.buy_d, sides.buy_v2, sides.buy_tp, sides.buy_v2_tp)
+        if sides.sell_d > 0:
+            sides.sell_v2, sides.sell_v2_tp = bump_v2(sides.sell_d, sides.sell_v2, sides.sell_tp, sides.sell_v2_tp)
+
+        def keep(d: float) -> bool:
+            return d > 0 and d + 1e-9 >= floor
+
+        if not keep(sides.buy_d):
+            sides.buy_d = sides.buy_tp = 0.0
+        if not keep(sides.sell_d):
+            sides.sell_d = sides.sell_tp = 0.0
+        if not keep(sides.buy_v2):
+            sides.buy_v2 = sides.buy_v2_tp = 0.0
+        if not keep(sides.sell_v2):
+            sides.sell_v2 = sides.sell_v2_tp = 0.0
         return sides
 
     def note(self, text: str) -> None:
@@ -434,7 +468,7 @@ class ShotEngine:
         wanted: dict[str, dict[str, Any]] = {}
         for pair in pairs:
             symbol = str(pair.get("symbol") or "").upper()
-            sides = self._filter_sides(_sides_from_pair(pair))
+            sides = self._plan_sides(pair)
             if not symbol or not sides.any():
                 continue
             wanted[symbol] = pair
@@ -448,7 +482,7 @@ class ShotEngine:
             fresh = wanted.get(symbol)
             if fresh is None:
                 continue
-            sides = self._filter_sides(_sides_from_pair(fresh))
+            sides = self._plan_sides(fresh)
             fp = sides.fingerprint()
             if fp != algo.fingerprint:
                 self.note(
@@ -476,7 +510,7 @@ class ShotEngine:
 
     def _start(self, pair: dict[str, Any]) -> None:
         symbol = str(pair.get("symbol") or "").upper()
-        sides = self._filter_sides(_sides_from_pair(pair))
+        sides = self._plan_sides(pair)
         if not sides.any():
             return
         lever = int(pair.get("lever") or self.leverage) or self.leverage
@@ -808,9 +842,13 @@ class ShotEngine:
                 and algo.v2_state != "pos"
                 and algo.buy_distance <= 0
                 and algo.sell_distance <= 0
+                and algo.buy_v2_distance <= 0
+                and algo.sell_v2_distance <= 0
             ):
                 self._kill(algo.symbol, "direction-off")
         self.save_runtime()
+        if self.plan_pairs:
+            self.sync_plan(self.plan_pairs)
 
     def _apply_directions_to_algo(self, algo: Algo) -> None:
         if not self.trade_long:
@@ -1012,6 +1050,8 @@ class ShotEngine:
             "autostop_usd": self.autostop_usd,
             "trade_long": self.trade_long,
             "trade_short": self.trade_short,
+            "min_order_distance": self.min_order_distance,
+            "min_v2_gap": self.min_v2_gap,
             "follow_delay_ms": self.cfg.follow_delay_ms,
             "hold_ms": self.cfg.hold_ms,
             "run_hours": self.cfg.run_hours,

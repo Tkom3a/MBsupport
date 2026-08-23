@@ -29,6 +29,8 @@ class TraderConfig:
     live_trading: bool = False
     trade_long: bool = True
     trade_short: bool = True
+    min_order_distance: float = 0.85
+    min_v2_gap: float = 0.3
     okx_rest: str = "https://www.okx.com"
     okx_ws: str = "wss://ws.okx.com:8443/ws/v5/public"
     okx_api_key: str = ""
@@ -97,6 +99,8 @@ def load_trader_config(root: Path | None = None) -> TraderConfig:
         live_trading=live and not emulate,
         trade_long=_b("TRADE_LONG", True),
         trade_short=_b("TRADE_SHORT", True),
+        min_order_distance=max(0.0, _f("MIN_ORDER_DISTANCE", 0.85)),
+        min_v2_gap=max(0.05, _f("MIN_V2_GAP", 0.3)),
         okx_rest=(os.getenv("OKX_REST") or "https://www.okx.com").rstrip("/"),
         okx_ws=os.getenv("OKX_WS") or "wss://ws.okx.com:8443/ws/v5/public",
         okx_api_key=os.getenv("OKX_API_KEY", "").strip(),

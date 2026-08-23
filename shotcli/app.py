@@ -216,8 +216,9 @@ def _status_lines(cli: ShotClient, state: dict[str, Any], ping: dict[str, str]) 
             f"SHORT={'on' if state.get('trade_short', True) else 'off'}"
         ),
         (
-            f"size x20={state.get('order_size_x20')}  x50={state.get('order_size_x50')}  "
-            f"autostop={state.get('autostop_usd')}$"
+        f"size x20={state.get('order_size_x20')}  x50={state.get('order_size_x50')}  "
+        f"autostop={state.get('autostop_usd')}$  "
+        f"minD={state.get('min_order_distance', 0.85)}%  v2gap={state.get('min_v2_gap', 0.3)}%"
         ),
         (
             f"час    сделок {hour.get('trades', 0)}  "
@@ -377,12 +378,18 @@ def apply_set(cli: ShotClient, key: str, value: str) -> None:
         "x50": "order_size_x50",
         "autostop": "autostop_usd",
         "stop": "autostop_usd",
+        "mindist": "min_order_distance",
+        "min_dist": "min_order_distance",
+        "v2gap": "min_v2_gap",
+        "v2_gap": "min_v2_gap",
         "core": "shotcore_url",
         "shotcore": "shotcore_url",
     }
     field = mapping.get(key)
     if not field:
-        raise RuntimeError(f"неизвестный ключ {key}. доступны: long, short, size20, size50, autostop, core")
+        raise RuntimeError(
+            f"неизвестный ключ {key}. доступны: long, short, size20, size50, autostop, mindist, v2gap, core"
+        )
     if field == "shotcore_url":
         res = cli.trader_post("/api/shotcore", {"url": value})
         print(f"ok  ShotCore URL → {res.get('shotcore_url')}")
@@ -397,7 +404,8 @@ def apply_set(cli: ShotClient, key: str, value: str) -> None:
         f"ok  long={'on' if res.get('trade_long', True) else 'off'}  "
         f"short={'on' if res.get('trade_short', True) else 'off'}  "
         f"x20={res.get('order_size_x20')}  x50={res.get('order_size_x50')}  "
-        f"autostop={res.get('autostop_usd')}"
+        f"autostop={res.get('autostop_usd')}  "
+        f"minD={res.get('min_order_distance')}  v2gap={res.get('min_v2_gap')}"
     )
 
 
