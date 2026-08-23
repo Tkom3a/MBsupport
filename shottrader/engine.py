@@ -197,6 +197,7 @@ class ShotEngine:
         self.autostop_usd = cfg.autostop_usd
         self.min_order_distance = cfg.min_order_distance
         self.min_v2_gap = cfg.min_v2_gap
+        self.v1_offset = cfg.v1_offset
         self.pair_lose_limit = cfg.pair_lose_limit
         self.pair_lose_window_hours = cfg.pair_lose_window_hours
         self.pair_ban_hours = cfg.pair_ban_hours
@@ -248,6 +249,8 @@ class ShotEngine:
             self.min_order_distance = max(0.0, float(raw["min_order_distance"]))
         if raw.get("min_v2_gap") not in (None, ""):
             self.min_v2_gap = max(0.05, float(raw["min_v2_gap"]))
+        if raw.get("v1_offset") not in (None, ""):
+            self.v1_offset = max(-2.0, min(5.0, float(raw["v1_offset"])))
         if raw.get("pair_lose_limit") not in (None, ""):
             self.pair_lose_limit = max(1, int(float(raw["pair_lose_limit"])))
         if raw.get("pair_lose_window_hours") not in (None, ""):
@@ -266,6 +269,7 @@ class ShotEngine:
             "autostop_usd": self.autostop_usd,
             "min_order_distance": self.min_order_distance,
             "min_v2_gap": self.min_v2_gap,
+            "v1_offset": self.v1_offset,
             "pair_lose_limit": self.pair_lose_limit,
             "pair_lose_window_hours": self.pair_lose_window_hours,
             "pair_ban_hours": self.pair_ban_hours,
@@ -367,7 +371,13 @@ class ShotEngine:
         return self._apply_distance_rules(self._filter_sides(_sides_from_pair(pair)))
 
     def _apply_distance_rules(self, sides: Sides) -> Sides:
-        """V2 не ближе min_v2_gap к первому; ордера короче min_order_distance не ставим."""
+        """Смещение первой D от рекомендации; V2 не ближе min_v2_gap; пол min_order_distance."""
+        off = round(float(self.v1_offset or 0), 2)
+        if abs(off) > 1e-9:
+            if sides.buy_d > 0:
+                sides.buy_d = round(sides.buy_d + off, 2)
+            if sides.sell_d > 0:
+                sides.sell_d = round(sides.sell_d + off, 2)
         gap = max(0.05, round(float(self.min_v2_gap or 0.3), 2))
         floor = max(0.0, round(float(self.min_order_distance or 0), 2))
 
@@ -1174,6 +1184,7 @@ class ShotEngine:
             "trade_short": self.trade_short,
             "min_order_distance": self.min_order_distance,
             "min_v2_gap": self.min_v2_gap,
+            "v1_offset": self.v1_offset,
             "pair_lose_limit": self.pair_lose_limit,
             "pair_lose_window_hours": self.pair_lose_window_hours,
             "pair_ban_hours": self.pair_ban_hours,

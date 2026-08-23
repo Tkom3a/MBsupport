@@ -219,6 +219,7 @@ def _status_lines(cli: ShotClient, state: dict[str, Any], ping: dict[str, str]) 
         f"size x20={state.get('order_size_x20')}  x50={state.get('order_size_x50')}  "
         f"autostop={state.get('autostop_usd')}$  "
         f"minD={state.get('min_order_distance', 0.85)}%  v2gap={state.get('min_v2_gap', 0.3)}%  "
+        f"v1off={float(state.get('v1_offset') or 0):+g}%  "
         f"подтверждений={state.get('min_fills', 2)}"
         ),
         (
@@ -394,6 +395,9 @@ def apply_set(cli: ShotClient, key: str, value: str) -> None:
         "min_dist": "min_order_distance",
         "v2gap": "min_v2_gap",
         "v2_gap": "min_v2_gap",
+        "v1off": "v1_offset",
+        "v1_offset": "v1_offset",
+        "offset": "v1_offset",
         "banloses": "pair_lose_limit",
         "ban_loses": "pair_lose_limit",
         "banwindow": "pair_lose_window_hours",
@@ -410,7 +414,7 @@ def apply_set(cli: ShotClient, key: str, value: str) -> None:
     if not field:
         raise RuntimeError(
             f"неизвестный ключ {key}. доступны: long, short, size20, size50, autostop, "
-            "mindist, v2gap, banloses, banwindow, banhours, minfills, core"
+            "mindist, v2gap, v1off, banloses, banwindow, banhours, minfills, core"
         )
     if field == "shotcore_url":
         res = cli.trader_post("/api/shotcore", {"url": value})
@@ -428,6 +432,7 @@ def apply_set(cli: ShotClient, key: str, value: str) -> None:
         f"x20={res.get('order_size_x20')}  x50={res.get('order_size_x50')}  "
         f"autostop={res.get('autostop_usd')}  "
         f"minD={res.get('min_order_distance')}  v2gap={res.get('min_v2_gap')}  "
+        f"v1off={res.get('v1_offset')}%  "
         f"бан={res.get('pair_lose_limit')} / {res.get('pair_lose_window_hours')}ч "
         f"→ {res.get('pair_ban_hours')}ч  "
         f"подтверждений={res.get('min_fills')}"

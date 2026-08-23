@@ -180,6 +180,9 @@ class ShotTrader:
             if "min_v2_gap" in body and body["min_v2_gap"] not in (None, ""):
                 self.engine.min_v2_gap = max(0.05, float(body["min_v2_gap"]))
                 self.cfg.min_v2_gap = self.engine.min_v2_gap
+            if "v1_offset" in body and body["v1_offset"] not in (None, ""):
+                self.engine.v1_offset = max(-2.0, min(5.0, float(body["v1_offset"])))
+                self.cfg.v1_offset = self.engine.v1_offset
             if "pair_lose_limit" in body and body["pair_lose_limit"] not in (None, ""):
                 self.engine.pair_lose_limit = max(1, int(float(body["pair_lose_limit"])))
                 self.cfg.pair_lose_limit = self.engine.pair_lose_limit
@@ -204,6 +207,7 @@ class ShotTrader:
             f"long={'on' if self.engine.trade_long else 'off'} "
             f"short={'on' if self.engine.trade_short else 'off'} "
             f"minD={self.engine.min_order_distance:g}% v2gap={self.engine.min_v2_gap:g}% "
+            f"v1off={self.engine.v1_offset:+g}% "
             f"бан={self.engine.pair_lose_limit} минуса / {self.engine.pair_lose_window_hours:g}ч "
             f"→ {self.engine.pair_ban_hours:g}ч  подтверждений={self.engine.min_fills}"
         )
@@ -219,6 +223,7 @@ class ShotTrader:
                 "trade_short": self.engine.trade_short,
                 "min_order_distance": self.engine.min_order_distance,
                 "min_v2_gap": self.engine.min_v2_gap,
+                "v1_offset": self.engine.v1_offset,
                 "pair_lose_limit": self.engine.pair_lose_limit,
                 "pair_lose_window_hours": self.engine.pair_lose_window_hours,
                 "pair_ban_hours": self.engine.pair_ban_hours,

@@ -168,6 +168,13 @@
         <input id="minDist" type="number" step="0.01" min="0" value="0.85" />
         <label>Мин. зазор V2 от первого, %</label>
         <input id="minV2Gap" type="number" step="0.01" min="0.05" value="0.30" />
+        <h2 style="margin-top:14px">Зазор первого ордера</h2>
+        <label>Смещение к рекомендации, %</label>
+        <input id="v1Offset" type="number" step="0.01" value="0" />
+        <div class="muted" id="v1OffsetHint" style="margin:6px 0 8px">
+          рекомендация 1% → ордер 1.00% · плюс глубже, минус ближе
+        </div>
+        <button class="primary" id="saveOffsetBtn">Применить зазор</button>
         <h2 style="margin-top:14px">Направление</h2>
         <label class="dir-check"><input id="tradeLong" type="checkbox" checked /> Ставить лонги (BUY)</label>
         <label class="dir-check"><input id="tradeShort" type="checkbox" checked /> Ставить шорты (SHORT)</label>
@@ -367,7 +374,7 @@
     }
 
     const settingsDirty = {
-      orderSize20: false, orderSize50: false, autostop: false, minDist: false, minV2Gap: false,
+      orderSize20: false, orderSize50: false, autostop: false, minDist: false, minV2Gap: false, v1Offset: false,
       banLoseLimit: false, banLoseWindow: false, banHours: false, minFills: false,
     };
     let settingsLocked = false;
@@ -389,6 +396,7 @@
         autostop_usd: Number(document.getElementById("autostop").value),
         min_order_distance: Number(document.getElementById("minDist").value),
         min_v2_gap: Number(document.getElementById("minV2Gap").value),
+        v1_offset: Number(document.getElementById("v1Offset").value),
         pair_lose_limit: Number(document.getElementById("banLoseLimit").value),
         pair_lose_window_hours: Number(document.getElementById("banLoseWindow").value),
         pair_ban_hours: Number(document.getElementById("banHours").value),
@@ -405,6 +413,7 @@
       if (data.autostop_usd != null) document.getElementById("autostop").value = data.autostop_usd;
       if (data.min_order_distance != null) document.getElementById("minDist").value = data.min_order_distance;
       if (data.min_v2_gap != null) document.getElementById("minV2Gap").value = data.min_v2_gap;
+      if (data.v1_offset != null) document.getElementById("v1Offset").value = data.v1_offset;
       if (data.pair_lose_limit != null) document.getElementById("banLoseLimit").value = data.pair_lose_limit;
       if (data.pair_lose_window_hours != null) document.getElementById("banLoseWindow").value = data.pair_lose_window_hours;
       if (data.pair_ban_hours != null) document.getElementById("banHours").value = data.pair_ban_hours;
@@ -416,6 +425,7 @@
       settingsDirty.autostop = false;
       settingsDirty.minDist = false;
       settingsDirty.minV2Gap = false;
+      settingsDirty.v1Offset = false;
       settingsDirty.banLoseLimit = false;
       settingsDirty.banLoseWindow = false;
       settingsDirty.banHours = false;
@@ -426,6 +436,7 @@
         if (data.autostop_usd != null) state.autostop_usd = data.autostop_usd;
         if (data.min_order_distance != null) state.min_order_distance = data.min_order_distance;
         if (data.min_v2_gap != null) state.min_v2_gap = data.min_v2_gap;
+        if (data.v1_offset != null) state.v1_offset = data.v1_offset;
         if (data.pair_lose_limit != null) state.pair_lose_limit = data.pair_lose_limit;
         if (data.pair_lose_window_hours != null) state.pair_lose_window_hours = data.pair_lose_window_hours;
         if (data.pair_ban_hours != null) state.pair_ban_hours = data.pair_ban_hours;
@@ -456,6 +467,10 @@
       }
       if (!Number.isFinite(payload.min_v2_gap) || payload.min_v2_gap < 0.05) {
         alert("Мин. зазор V2 должен быть ≥ 0.05");
+        return;
+      }
+      if (!Number.isFinite(payload.v1_offset) || payload.v1_offset < -2 || payload.v1_offset > 5) {
+        alert("Зазор первого ордера должен быть от −2% до +5%");
         return;
       }
       if (!Number.isFinite(payload.pair_lose_limit) || payload.pair_lose_limit < 1) {
@@ -510,6 +525,7 @@
       syncInput("autostop", state.autostop_usd);
       syncInput("minDist", state.min_order_distance);
       syncInput("minV2Gap", state.min_v2_gap);
+      syncInput("v1Offset", state.v1_offset);
       syncInput("banLoseLimit", state.pair_lose_limit);
       syncInput("banLoseWindow", state.pair_lose_window_hours);
       syncInput("banHours", state.pair_ban_hours);
@@ -543,6 +559,10 @@
       const fillsN = Number(state.min_fills || 2);
       document.getElementById("fillsHint").textContent =
         `Дистанция должна подтвердиться ${fillsN} раз, иначе пару в план не берём.`;
+      const off = Number(state.v1_offset || 0);
+      const sign = off >= 0 ? "+" : "";
+      document.getElementById("v1OffsetHint").textContent =
+        `рекомендация 1% → ордер ${(1 + off).toFixed(2)}% (${sign}${off.toFixed(2)}%) · плюс глубже, минус ближе`;
       const bans = state.bans || [];
       document.getElementById("banList").innerHTML = bans.length
         ? bans.map((b) => {
@@ -748,6 +768,7 @@
       if (settingsDirty.autostop) next.autostop_usd = Number(document.getElementById("autostop").value);
       if (settingsDirty.minDist) next.min_order_distance = Number(document.getElementById("minDist").value);
       if (settingsDirty.minV2Gap) next.min_v2_gap = Number(document.getElementById("minV2Gap").value);
+      if (settingsDirty.v1Offset) next.v1_offset = Number(document.getElementById("v1Offset").value);
       if (settingsDirty.banLoseLimit) next.pair_lose_limit = Number(document.getElementById("banLoseLimit").value);
       if (settingsDirty.banLoseWindow) next.pair_lose_window_hours = Number(document.getElementById("banLoseWindow").value);
       if (settingsDirty.banHours) next.pair_ban_hours = Number(document.getElementById("banHours").value);
@@ -756,7 +777,7 @@
       render();
     }
 
-    ["orderSize20", "orderSize50", "autostop", "minDist", "minV2Gap", "banLoseLimit", "banLoseWindow", "banHours", "minFills"].forEach((id) => {
+    ["orderSize20", "orderSize50", "autostop", "minDist", "minV2Gap", "v1Offset", "banLoseLimit", "banLoseWindow", "banHours", "minFills"].forEach((id) => {
       const el = document.getElementById(id);
       el.addEventListener("input", () => { settingsDirty[id] = true; });
       el.addEventListener("keydown", (ev) => {
@@ -768,6 +789,7 @@
     });
     document.getElementById("saveBtn").onclick = () => saveSettings();
     document.getElementById("saveFillsBtn").onclick = () => saveSettings();
+    document.getElementById("saveOffsetBtn").onclick = () => saveSettings();
     ["tradeLong", "tradeShort"].forEach((id) => {
       document.getElementById(id).addEventListener("change", () => saveSettings());
     });
