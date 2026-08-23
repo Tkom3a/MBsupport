@@ -106,22 +106,27 @@
     .muted-row { opacity: 0.45; }
     .tag { font-size: 11px; color: var(--muted); }
     .tag.on { color: var(--up); }
-    .grid { display: grid; grid-template-columns: 1.75fr 0.85fr; gap: 16px; padding: 0 24px 24px; }
+    .grid { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 12px; padding: 0 24px 24px; }
     .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: auto; }
     table { width: 100%; border-collapse: collapse; }
-    th, td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    th, td { padding: 7px 7px; text-align: right; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; white-space: nowrap; }
     th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
     td:first-child, th:first-child { text-align: left; font-family: ui-monospace, Consolas, monospace; }
+    th:last-child, td:last-child { min-width: 168px; }
     tbody tr:hover { background: #1c2230; }
     .down { color: var(--down); }
     .up { color: var(--up); }
     .amber { color: var(--amber); font-weight: 650; }
     .feed { flex: 1; min-height: 0; max-height: none; overflow: auto; }
     .feed-wrap {
-      display: flex; flex-direction: column; max-height: 72vh; overflow: hidden;
+      display: flex; flex-direction: column; max-height: 72vh; overflow: hidden; min-width: 0;
     }
-    .feed-search { min-width: 160px; max-width: 240px; padding: 5px 8px; font-size: 12px; }
-    .feed-item { display: grid; grid-template-columns: 92px 1fr auto; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); align-items: center; }
+    .feed-wrap .panel-head { flex-direction: column; align-items: stretch; gap: 6px; }
+    .feed-wrap .head-actions { width: 100%; }
+    .feed-search { min-width: 0; width: 100%; max-width: none; padding: 4px 6px; font-size: 11px; }
+    .feed-item { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; padding: 6px 8px; border-bottom: 1px solid var(--line); align-items: start; }
+    .feed-item .meta { font-size: 11px; }
+    .feed-item .feed-dir { font-size: 12px; font-weight: 650; }
     .feed-item:hover { background: #1c2230; }
     .empty { padding: 28px; color: var(--muted); }
     .note { padding: 0 24px 16px; color: var(--muted); font-size: 12px; }
@@ -221,7 +226,7 @@
         <h2>Лента событий</h2>
         <div class="head-actions">
           <span class="meta" id="feedMeta"></span>
-          <input id="feedSearch" class="feed-search" placeholder="поиск пары, например SOL" />
+          <input id="feedSearch" class="feed-search" placeholder="поиск, SOL" />
         </div>
       </div>
       <div class="feed" id="feed"></div>
@@ -480,11 +485,12 @@
       }
       box.innerHTML = items.map(s => `
         <div class="feed-item">
-          <div class="meta">${s.time}</div>
-          <div>${s.symbol} <span class="amber">${lever(s.lever)}</span>
-            <div class="meta">реком. ${fmt(s.suggest_distance)}% · ${s.vplus ? "плюс" : "минус"} ${signed(s.pnl_pct)}% / ${s.hold_ms || 300}мс</div>
+          <div>
+            <div class="meta">${s.time}</div>
+            <div>${(s.symbol || "").split("-")[0]} <span class="amber">${lever(s.lever)}</span></div>
+            <div class="meta">D ${fmt(s.suggest_distance)} · ${s.vplus ? "+" : "−"}${fmt(s.pnl_pct)}</div>
           </div>
-          <div class="${dirClass(s.direction)}">${s.direction} ${fmt(s.percent)}%</div>
+          <div class="feed-dir ${dirClass(s.direction)}">${s.direction} ${fmt(s.percent)}%</div>
         </div>`).join("");
     }
 
