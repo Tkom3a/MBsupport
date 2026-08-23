@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import time
 from typing import Any
@@ -161,52 +160,97 @@ def run_menu(cli: ShotClient) -> None:
 
 def print_status(cli: ShotClient) -> None:
     ping = cli.ping()
-    print(f"ShotCore   {cli.core_url}  {ping['core']}")
-    print(f"ShotTrader {cli.trader_url}  {ping['trader']}")
     state = cli.trader_get("/api/state")
-    mode = "эмуляция" if state.get("emulate") else "LIVE"
-    halt = f"  АВТО-СТОП: {state.get('halt_reason')}" if state.get("halted") else ""
-    print(f"режим {mode}{halt}")
-    print(
-        f"направление  LONG={'on' if state.get('trade_long', True) else 'off'}  "
-        f"SHORT={'on' if state.get('trade_short', True) else 'off'}"
-    )
-    print(
-        f"size x20={state.get('order_size_x20')}  x50={state.get('order_size_x50')}  "
-        f"autostop={state.get('autostop_usd')}$"
-    )
-    hour = state.get("hour") or {}
-    today = state.get("today") or state.get("day") or {}
-    print(
-        f"час    сделок {hour.get('trades', 0)}  "
-        f"+{hour.get('plus', 0)}/−{hour.get('minus', 0)}  PnL {_money(hour.get('pnl_usd'))}"
-    )
-    print(
-        f"сутки  сделок {today.get('trades', 0)}  "
-        f"+{today.get('plus', 0)}/−{today.get('minus', 0)}  PnL {_money(today.get('pnl_usd'))}"
-    )
-    print(
-        f"нереализ. {_money(state.get('unrealized'))}  в сделках {float(state.get('in_trade') or 0):.2f}$  "
-        f"заморожено {float(state.get('frozen_margin_usdt') or 0):.2f} USDT"
-    )
-    print(f"клонов {len(state.get('markets') or [])}  план {len(state.get('plan') or [])} пар")
-    if state.get("plan_error"):
-        print(f"план: {state['plan_error']}")
+    print("\n".join(_status_lines(cli, state, ping)))
 
 
 def print_orders(cli: ShotClient) -> None:
     state = cli.trader_get("/api/state")
+    print("\n".join(_order_lines(state)))
+
+
+def watch_orders(cli: ShotClient) -> None:
+    """Цифры переписываются на месте, экран не мигает."""
+    _cursor(False)
+    ping = {"core": "…", "trader": "…"}
+    tick = 0
+    try:
+        while True:
+            if tick % 15 == 0:
+                try:
+                    ping = cli.ping()
+                except Exception:
+                    ping = {"core": "?", "trader": "?"}
+            try:
+                state = cli.trader_get("/api/state")
+                lines = [
+                    f"{time.strftime('%H:%M:%S')}  ордера онлайн  Ctrl+C выход",
+                    *_status_lines(cli, state, ping),
+                    "",
+                    *_order_lines(state),
+                ]
+            except Exception as exc:
+                lines = [
+                    f"{time.strftime('%H:%M:%S')}  ордера онлайн  Ctrl+C выход",
+                    f"ошибка: {exc}",
+                ]
+            _paint(lines)
+            tick += 1
+            time.sleep(1.0)
+    finally:
+        _cursor(True)
+        print()
+
+
+def _status_lines(cli: ShotClient, state: dict[str, Any], ping: dict[str, str]) -> list[str]:
+    mode = "эмуляция" if state.get("emulate") else "LIVE"
+    halt = f"  АВТО-СТОП: {state.get('halt_reason')}" if state.get("halted") else ""
+    hour = state.get("hour") or {}
+    today = state.get("today") or state.get("day") or {}
+    lines = [
+        f"ShotCore   {cli.core_url}  {ping.get('core', '')}",
+        f"ShotTrader {cli.trader_url}  {ping.get('trader', '')}",
+        f"режим {mode}{halt}",
+        (
+            f"направление  LONG={'on' if state.get('trade_long', True) else 'off'}  "
+            f"SHORT={'on' if state.get('trade_short', True) else 'off'}"
+        ),
+        (
+            f"size x20={state.get('order_size_x20')}  x50={state.get('order_size_x50')}  "
+            f"autostop={state.get('autostop_usd')}$"
+        ),
+        (
+            f"час    сделок {hour.get('trades', 0)}  "
+            f"+{hour.get('plus', 0)}/−{hour.get('minus', 0)}  PnL {_money(hour.get('pnl_usd'))}"
+        ),
+        (
+            f"сутки  сделок {today.get('trades', 0)}  "
+            f"+{today.get('plus', 0)}/−{today.get('minus', 0)}  PnL {_money(today.get('pnl_usd'))}"
+        ),
+        (
+            f"нереализ. {_money(state.get('unrealized'))}  "
+            f"в сделках {float(state.get('in_trade') or 0):.2f}$  "
+            f"заморожено {float(state.get('frozen_margin_usdt') or 0):.2f} USDT"
+        ),
+        f"клонов {len(state.get('markets') or [])}  план {len(state.get('plan') or [])} пар",
+    ]
+    if state.get("plan_error"):
+        lines.append(f"план: {state['plan_error']}")
+    return lines
+
+
+def _order_lines(state: dict[str, Any]) -> list[str]:
     rows = state.get("markets") or []
     if not rows:
-        err = state.get("plan_error") or "нет клонов"
-        print(err)
-        return
-    print(
-        f"{'пара':<10} {'цена':>10} {'BUY':>10} {'D':>6} {'V2':>6} "
-        f"{'SELL':>10} {'D':>6} {'V2':>6} {'сост':>8} {'V2':>6} {'PnL':>9}"
-    )
+        return [state.get("plan_error") or "нет клонов"]
+    lines = [
+        (
+            f"{'пара':<10} {'цена':>10} {'BUY':>10} {'D':>6} {'V2':>6} "
+            f"{'SELL':>10} {'D':>6} {'V2':>6} {'сост':>8} {'V2':>6} {'PnL':>9}"
+        )
+    ]
     for row in rows:
-        print(
+        lines.append(
             f"{_base(row.get('symbol')):<10} "
             f"{_px(row.get('last')):>10} "
             f"{_px(row.get('buy')):>10} "
@@ -219,26 +263,12 @@ def print_orders(cli: ShotClient) -> None:
             f"{_st_v2(row):>6} "
             f"{_money(row.get('unrealized') if row.get('state') == 'pos' else 0):>9}"
         )
-    print(
+    lines.append(
         f"заморожено {float(state.get('frozen_margin_usdt') or 0):.2f} USDT  "
         f"LONG={'on' if state.get('trade_long', True) else 'off'}  "
         f"SHORT={'on' if state.get('trade_short', True) else 'off'}"
     )
-
-
-def watch_orders(cli: ShotClient) -> None:
-    print("watch ордеров · Ctrl+C назад")
-    time.sleep(0.4)
-    while True:
-        _clear()
-        print(time.strftime("%H:%M:%S"), "· ордера онлайн · Ctrl+C выход")
-        try:
-            print_status(cli)
-            print()
-            print_orders(cli)
-        except Exception as exc:
-            print(f"ошибка: {exc}")
-        time.sleep(1.0)
+    return lines
 
 
 def print_deals(cli: ShotClient) -> None:
@@ -492,9 +522,18 @@ def _st_v2(row: dict[str, Any]) -> str:
     return "—"
 
 
-def _clear() -> None:
-    if os.name == "nt":
-        os.system("cls")
-    else:
-        sys.stdout.write("\033[2J\033[H")
-        sys.stdout.flush()
+def _cursor(visible: bool) -> None:
+    sys.stdout.write("\033[?25h" if visible else "\033[?25l")
+    sys.stdout.flush()
+
+
+def _paint(lines: list[str]) -> None:
+    """Перерисовать кадр без cls: курсор вверх, строки на месте, хвост стереть."""
+    out = ["\033[H"]
+    for line in lines:
+        out.append(line.replace("\n", " ").replace("\r", ""))
+        out.append("\033[K\n")
+    out.append("\033[J")
+    sys.stdout.write("".join(out))
+    sys.stdout.flush()
+
