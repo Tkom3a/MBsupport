@@ -66,6 +66,11 @@
     button { cursor: pointer; }
     button.primary { background: #3a4a22; border-color: #5a7a32; }
     button.danger { background: #3a2226; border-color: #7a323c; }
+    label.dir-check {
+      display: flex; align-items: center; gap: 8px; margin: 6px 0;
+      color: var(--text); font-size: 13px; cursor: pointer;
+    }
+    label.dir-check input { width: auto; margin: 0; }
     button.log-toggle {
       display: flex; align-items: center; justify-content: space-between; gap: 8px;
       width: 100%; margin-top: 14px; margin-bottom: 0; cursor: pointer;
@@ -158,6 +163,9 @@
         <input id="orderSize50" type="number" step="1" min="1" value="10" />
         <label>Авто-стоп, $</label>
         <input id="autostop" type="number" step="0.5" min="0.5" value="10" />
+        <h2 style="margin-top:14px">Направление</h2>
+        <label class="dir-check"><input id="tradeLong" type="checkbox" checked /> Ставить лонги (BUY)</label>
+        <label class="dir-check"><input id="tradeShort" type="checkbox" checked /> Ставить шорты (SHORT)</label>
         <div class="row2" style="margin-top:10px">
           <button class="primary" id="saveBtn">Применить</button>
           <button class="danger" id="panicBtn">Panic</button>
@@ -184,7 +192,7 @@
           <table>
             <thead>
               <tr class="budget">
-                <th colspan="15" id="budgetRow">Без плеча заморожено: 0.00 USDT</th>
+                <th colspan="23" id="budgetRow">Без плеча заморожено: 0.00 USDT</th>
               </tr>
               <tr>
                 <th>Пара</th>
@@ -193,18 +201,26 @@
                 <th>до BUY</th>
                 <th>D BUY</th>
                 <th>TP BUY</th>
+                <th>BUY V2</th>
+                <th>до V2</th>
+                <th>D V2</th>
                 <th>SELL</th>
                 <th>до SELL</th>
                 <th>D SHORT</th>
                 <th>TP SHORT</th>
+                <th>SELL V2</th>
+                <th>до V2</th>
+                <th>D V2</th>
                 <th>Сумма</th>
                 <th>+ / −</th>
                 <th>Сост.</th>
                 <th>PnL</th>
+                <th>V2</th>
+                <th>PnL V2</th>
                 <th>мин</th>
               </tr>
             </thead>
-            <tbody id="markets"><tr><td colspan="15" class="muted">ожидание клонов</td></tr></tbody>
+            <tbody id="markets"><tr><td colspan="23" class="muted">ожидание клонов</td></tr></tbody>
           </table>
         </div>
         <div class="deals-panel">
@@ -237,7 +253,7 @@
         <div class="pane">
           <h2>План ShotCore</h2>
           <table>
-            <thead><tr><th>Пара</th><th>BUY</th><th>SHORT</th><th>+</th></tr></thead>
+            <thead><tr><th>Пара</th><th>BUY</th><th>V2</th><th>SHORT</th><th>V2</th></tr></thead>
             <tbody id="plan"></tbody>
           </table>
         </div>
@@ -337,6 +353,8 @@
         order_size_x20: Number(document.getElementById("orderSize20").value),
         order_size_x50: Number(document.getElementById("orderSize50").value),
         autostop_usd: Number(document.getElementById("autostop").value),
+        trade_long: document.getElementById("tradeLong").checked,
+        trade_short: document.getElementById("tradeShort").checked,
       };
     }
 
@@ -345,6 +363,8 @@
       if (data.order_size_x20 != null) document.getElementById("orderSize20").value = data.order_size_x20;
       if (data.order_size_x50 != null) document.getElementById("orderSize50").value = data.order_size_x50;
       if (data.autostop_usd != null) document.getElementById("autostop").value = data.autostop_usd;
+      if (data.trade_long != null) document.getElementById("tradeLong").checked = !!data.trade_long;
+      if (data.trade_short != null) document.getElementById("tradeShort").checked = !!data.trade_short;
       settingsDirty.orderSize20 = false;
       settingsDirty.orderSize50 = false;
       settingsDirty.autostop = false;
@@ -352,6 +372,8 @@
         if (data.order_size_x20 != null) state.order_size_x20 = data.order_size_x20;
         if (data.order_size_x50 != null) state.order_size_x50 = data.order_size_x50;
         if (data.autostop_usd != null) state.autostop_usd = data.autostop_usd;
+        if (data.trade_long != null) state.trade_long = data.trade_long;
+        if (data.trade_short != null) state.trade_short = data.trade_short;
       }
     }
 
@@ -401,6 +423,12 @@
       syncInput("orderSize20", state.order_size_x20);
       syncInput("orderSize50", state.order_size_x50);
       syncInput("autostop", state.autostop_usd);
+      if (!document.getElementById("tradeLong").matches(":focus")) {
+        document.getElementById("tradeLong").checked = state.trade_long !== false;
+      }
+      if (!document.getElementById("tradeShort").matches(":focus")) {
+        document.getElementById("tradeShort").checked = state.trade_short !== false;
+      }
       settingsHydrated = true;
       document.getElementById("unreal").textContent = money(state.unrealized);
       document.getElementById("unreal").className = "v " + (state.unrealized >= 0 ? "up" : "down");
@@ -427,22 +455,30 @@
       const body = document.getElementById("markets");
       if (!rows.length) {
         body.innerHTML = state.plan_error
-          ? `<tr><td colspan="15" class="muted">нет клонов — ShotCore недоступен: ${state.plan_error}</td></tr>`
-          : `<tr><td colspan="15" class="muted">ожидание клонов из плана ShotCore</td></tr>`;
+          ? `<tr><td colspan="23" class="muted">нет клонов — ShotCore недоступен: ${state.plan_error}</td></tr>`
+          : `<tr><td colspan="23" class="muted">ожидание клонов из плана ShotCore</td></tr>`;
       } else {
         body.innerHTML = rows.map((x) => {
           const sel = x.symbol === state.view ? "sel" : "";
           const st = x.state === "pos"
             ? `<span class="amber">${x.side || "pos"}</span>`
             : (x.state || "hunt");
+          const st2 = x.v2_state === "pos"
+            ? `<span class="amber">${x.v2_side || "pos"}</span>`
+            : (Number(x.buy_v2_distance) > 0 || Number(x.sell_v2_distance) > 0 ? (x.v2_state || "hunt") : "—");
           const u = x.state === "pos"
             ? `<span class="${Number(x.unrealized) >= 0 ? "up" : "down"}">${money(x.unrealized)}</span>`
             : "—";
-          const sum = x.state === "pos"
-            ? `<span class="amber">${fmt(x.in_trade || x.size_usdt)} $</span>`
+          const u2 = x.v2_state === "pos"
+            ? `<span class="${Number(x.unrealized_v2) >= 0 ? "up" : "down"}">${money(x.unrealized_v2)}</span>`
+            : "—";
+          const sum = Number(x.in_trade) > 0
+            ? `<span class="amber">${fmt(x.in_trade)} $</span>`
             : `<span class="muted">${fmt(x.size_usdt)} $</span>`;
           const dBuy = Number(x.buy_distance) > 0 ? fmt(x.buy_distance) : "—";
           const dSell = Number(x.sell_distance) > 0 ? fmt(x.sell_distance) : "—";
+          const dBuyV2 = Number(x.buy_v2_distance) > 0 ? fmt(x.buy_v2_distance) : "—";
+          const dSellV2 = Number(x.sell_v2_distance) > 0 ? fmt(x.sell_v2_distance) : "—";
           const tpBuy = Number(x.buy_tp) > 0 ? fmt(x.buy_tp) : "—";
           const tpSell = Number(x.sell_tp) > 0 ? fmt(x.sell_tp) : "—";
           const wl = `<span class="up">${x.wins || 0}</span>/<span class="down">${x.losses || 0}</span>`;
@@ -453,14 +489,22 @@
             ${distCell(x.buy_dist_pct)}
             <td class="up">${dBuy}</td>
             <td class="up">${tpBuy}</td>
+            <td class="up">${px(x.buy_v2)}</td>
+            ${distCell(x.buy_v2_dist_pct)}
+            <td class="up">${dBuyV2}</td>
             <td class="down">${px(x.sell)}</td>
             ${distCell(x.sell_dist_pct)}
             <td class="down">${dSell}</td>
             <td class="down">${tpSell}</td>
+            <td class="down">${px(x.sell_v2)}</td>
+            ${distCell(x.sell_v2_dist_pct)}
+            <td class="down">${dSellV2}</td>
             <td>${sum}</td>
             <td>${wl}</td>
             <td>${st}</td>
             <td>${u}</td>
+            <td>${st2}</td>
+            <td>${u2}</td>
             <td>${x.left_min}</td>
           </tr>`;
         }).join("");
@@ -475,9 +519,10 @@
       document.getElementById("plan").innerHTML = (state.plan || []).slice(0, 20).map((p) => `
         <tr><td>${(p.symbol || "").split("-")[0]} <span class="muted">x${p.lever || "—"}</span></td>
         <td class="up">${Number(p.buy_pct) > 0 ? fmt(p.buy_pct) : "—"}</td>
+        <td class="up">${Number(p.buy_v2_pct) > 0 ? fmt(p.buy_v2_pct) : "—"}</td>
         <td class="down">${Number(p.sell_pct) > 0 ? fmt(p.sell_pct) : (Number(p.recommend_pct) > 0 && !p.buy_pct ? fmt(p.recommend_pct) : "—")}</td>
-        <td>${fmt(p.win_prob || 0, 0)}%</td></tr>`).join("")
-        || `<tr><td colspan="4" class="muted">пустой план</td></tr>`;
+        <td class="down">${Number(p.sell_v2_pct) > 0 ? fmt(p.sell_v2_pct) : "—"}</td></tr>`).join("")
+        || `<tr><td colspan="5" class="muted">пустой план</td></tr>`;
       renderDeals();
       document.getElementById("log").innerHTML = [...(state.log || [])].reverse().map((l) => `<div>${l}</div>`).join("");
       renderReports(state.reports);
@@ -531,7 +576,7 @@
             <td class="muted">${tradeTime(j.ts)}</td>
             <td>${(j.symbol || "").split("-")[0]}</td>
             <td class="${sideCls}">${(j.side || "").toUpperCase() || "—"}</td>
-            <td class="amber">${Number(j.distance) > 0 ? fmt(j.distance) + "%" : "—"}</td>
+            <td class="amber">${Number(j.distance) > 0 ? fmt(j.distance) + "%" : "—"}${j.layer === "v2" ? " <span class=\"muted\">V2</span>" : ""}</td>
             <td class="amber">${lever > 0 ? "x" + lever : "—"}</td>
             <td>${size > 0 ? fmt(size) + "$" : "—"}</td>
             ${pctCell}
@@ -601,6 +646,9 @@
       });
     });
     document.getElementById("saveBtn").onclick = () => saveSettings();
+    ["tradeLong", "tradeShort"].forEach((id) => {
+      document.getElementById(id).addEventListener("change", () => saveSettings());
+    });
     document.getElementById("dealsFilter").addEventListener("input", () => {
       lastDealsSig = "";
       if (state) renderDeals();

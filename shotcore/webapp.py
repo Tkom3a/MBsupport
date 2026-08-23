@@ -32,6 +32,8 @@ def build_app(core: ShotCore) -> web.Application:
     app.router.add_get("/api/stats", _stats)
     app.router.add_get("/api/shots", _shots)
     app.router.add_get("/api/mt-plan", _mt_plan)
+    app.router.add_get("/api/algo", _algo_get)
+    app.router.add_post("/api/algo", _algo_set)
     if WEB_DIR.is_dir():
         app.router.add_static("/static", WEB_DIR)
     return app
@@ -128,6 +130,27 @@ async def _mt_plan(request: web.Request) -> web.Response:
         run_hours=core.cfg.output.mt_run_hours,
     )
     return _json(plan)
+
+
+async def _algo_get(request: web.Request) -> web.Response:
+    core: ShotCore = request.app["core"]
+    return _json(core.algo_snapshot())
+
+
+async def _algo_set(request: web.Request) -> web.Response:
+    core: ShotCore = request.app["core"]
+    try:
+        body = await request.json()
+    except Exception:
+        return _json({"ok": False, "error": "нужен JSON"})
+    if not isinstance(body, dict):
+        return web.Response(status=400, text="нужен объект")
+    try:
+        payload = core.apply_algo(body)
+    except (TypeError, ValueError) as exc:
+        return _json({"ok": False, "error": str(exc)})
+    payload["ok"] = True
+    return _json(payload)
 
 
 def _int(request: web.Request, name: str, default: int) -> int:

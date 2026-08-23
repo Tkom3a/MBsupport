@@ -27,6 +27,8 @@ class TraderConfig:
     autostop_usd: float = 10.0
     emulate: bool = True
     live_trading: bool = False
+    trade_long: bool = True
+    trade_short: bool = True
     okx_rest: str = "https://www.okx.com"
     okx_ws: str = "wss://ws.okx.com:8443/ws/v5/public"
     okx_api_key: str = ""
@@ -93,6 +95,8 @@ def load_trader_config(root: Path | None = None) -> TraderConfig:
         autostop_usd=max(0.5, _f("AUTOSTOP_USD", 10.0)),
         emulate=emulate,
         live_trading=live and not emulate,
+        trade_long=_b("TRADE_LONG", True),
+        trade_short=_b("TRADE_SHORT", True),
         okx_rest=(os.getenv("OKX_REST") or "https://www.okx.com").rstrip("/"),
         okx_ws=os.getenv("OKX_WS") or "wss://ws.okx.com:8443/ws/v5/public",
         okx_api_key=os.getenv("OKX_API_KEY", "").strip(),

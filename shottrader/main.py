@@ -156,6 +156,12 @@ class ShotTrader:
             if "autostop_usd" in body and body["autostop_usd"] not in (None, ""):
                 self.engine.autostop_usd = max(0.5, float(body["autostop_usd"]))
                 self.cfg.autostop_usd = self.engine.autostop_usd
+            if "trade_long" in body:
+                self.engine.trade_long = bool(body["trade_long"])
+                self.cfg.trade_long = self.engine.trade_long
+            if "trade_short" in body:
+                self.engine.trade_short = bool(body["trade_short"])
+                self.cfg.trade_short = self.engine.trade_short
         except (TypeError, ValueError) as exc:
             return web.json_response({"ok": False, "error": f"неверное значение: {exc}"}, status=400)
         if "shotcore_url" in body:
@@ -163,7 +169,9 @@ class ShotTrader:
         self.engine.apply_runtime_settings()
         self.engine.note(
             f"настройки: x20={self.engine.order_size_x20:g} x50={self.engine.order_size_x50:g} "
-            f"autostop={self.engine.autostop_usd:g}$"
+            f"autostop={self.engine.autostop_usd:g}$ "
+            f"long={'on' if self.engine.trade_long else 'off'} "
+            f"short={'on' if self.engine.trade_short else 'off'}"
         )
         return web.json_response(
             {
@@ -173,6 +181,8 @@ class ShotTrader:
                 "order_size_x50": self.engine.order_size_x50,
                 "leverage": self.engine.leverage,
                 "autostop_usd": self.engine.autostop_usd,
+                "trade_long": self.engine.trade_long,
+                "trade_short": self.engine.trade_short,
             }
         )
 

@@ -62,6 +62,20 @@
     .live { display: inline-flex; align-items: center; gap: 6px; color: var(--up); font-variant-numeric: tabular-nums; }
     .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--up); box-shadow: 0 0 0 4px #4fba7a22; }
     .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 12px 24px 0; }
+    .avg-bar {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+      padding: 12px 24px 0;
+    }
+    .avg-card {
+      background: linear-gradient(180deg, #1a2434, #151922);
+      border: 1px solid #31405a; border-radius: 10px; padding: 12px 16px;
+    }
+    .avg-card.long { border-color: #2d6b4f; }
+    .avg-card.short { border-color: #7a323c; }
+    .avg-card .lbl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .avg-card .row { display: flex; align-items: baseline; gap: 12px; margin-top: 6px; flex-wrap: wrap; }
+    .avg-card .val { font-size: 26px; font-weight: 750; font-variant-numeric: tabular-nums; }
+    .avg-card .sub { color: var(--muted); font-size: 12px; }
     .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
     .kpi .lbl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
     .kpi .val { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 4px; }
@@ -118,7 +132,7 @@
     .panel-head .head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .lever-filter { min-width: 118px; padding: 5px 8px; font-size: 12px; }
     @media (max-width: 1100px) {
-      .grid, .kpis, .mt-wrap, .mt-nums { grid-template-columns: 1fr; }
+      .grid, .kpis, .avg-bar, .mt-wrap, .mt-nums { grid-template-columns: 1fr; }
       header { flex-direction: column; align-items: flex-start; }
     }
   </style>
@@ -144,6 +158,22 @@
     <div class="kpi"><div class="lbl">Прострелов</div><div class="val" id="kpiShots">—</div></div>
     <div class="kpi"><div class="lbl">Активных рынков</div><div class="val" id="kpiActive">—</div></div>
     <div class="kpi"><div class="lbl">Следим пар</div><div class="val" id="kpiWatch">—</div></div>
+  </div>
+  <div class="avg-bar">
+    <div class="avg-card long">
+      <div class="lbl">Средняя рекомендация LONG / BUY</div>
+      <div class="row">
+        <div class="val up" id="avgBuy">—</div>
+        <div class="sub" id="avgBuyMeta">нет рекомендаций</div>
+      </div>
+    </div>
+    <div class="avg-card short">
+      <div class="lbl">Средняя рекомендация SHORT / SELL</div>
+      <div class="row">
+        <div class="val down" id="avgSell">—</div>
+        <div class="sub" id="avgSellMeta">нет рекомендаций</div>
+      </div>
+    </div>
   </div>
   <div class="toolbar">
     <select id="lookback">
@@ -171,7 +201,9 @@
             <th>Плечо</th>
             <th>Прострелы</th>
             <th>BUY D</th>
+            <th>BUY V2</th>
             <th>SHORT D</th>
+            <th>SHORT V2</th>
             <th>BUY TP</th>
             <th>SHORT TP</th>
             <th>Фильтр</th>
@@ -181,7 +213,7 @@
             <th>Последний</th>
           </tr>
         </thead>
-        <tbody id="rows"><tr><td class="empty" colspan="12">Пока нет прострелов в выбранном окне</td></tr></tbody>
+        <tbody id="rows"><tr><td class="empty" colspan="14">Пока нет прострелов в выбранном окне</td></tr></tbody>
       </table>
     </section>
     <section class="panel feed-wrap">
@@ -197,6 +229,7 @@
   </div>
   <div class="note">
     Сначала пишутся все прострелы пары за окно (по умолчанию 3 часа). Потом подбирается дистанция: измерить глубину импульса и отступить 0.05–0.10% от края, чтобы лимит заполнился. Закрытие — TP, если цена дошла за 0.3 с после входа, иначе по времени. В рекомендацию идёт связка D/TP с максимальной прибылью среди тех, где плюсовых сделок ≥ 70%. Если порог не набирается — пара без рекомендации (шум). Дополнительно проверяются фильтры «спокойный BTC» и отсечение мелких импульсов.
+    Сверху — среднее D по всем уже найденным рекомендациям отдельно для LONG и SHORT (пары без рекомендации в среднее не входят). V2 — страховочная дистанция: среднее прострелов глубже основной рекомендации.
   </div>
   <div class="mt-wrap">
     <section class="mt-box">
@@ -391,6 +424,16 @@
         (leverFilterEl.value ? ` · x${leverFilterEl.value}` : "");
 
       lastRows = stats.rows || [];
+      const buyN = stats.rec_buy_n || 0;
+      const sellN = stats.rec_sell_n || 0;
+      document.getElementById("avgBuy").textContent = buyN ? (fmt(stats.avg_buy_pct) + "%") : "—";
+      document.getElementById("avgSell").textContent = sellN ? (fmt(stats.avg_sell_pct) + "%") : "—";
+      document.getElementById("avgBuyMeta").textContent = buyN
+        ? `${buyN} пар · TP ${fmt(stats.avg_buy_tp_pct || 0)}%` + (stats.avg_buy_v2_pct ? ` · V2 ${fmt(stats.avg_buy_v2_pct)}%` : "")
+        : "нет рекомендаций BUY";
+      document.getElementById("avgSellMeta").textContent = sellN
+        ? `${sellN} пар · TP ${fmt(stats.avg_sell_tp_pct || 0)}%` + (stats.avg_sell_v2_pct ? ` · V2 ${fmt(stats.avg_sell_v2_pct)}%` : "")
+        : "нет рекомендаций SHORT";
       renderTable();
       renderFeed(shots.shots || []);
     }
@@ -400,7 +443,7 @@
       const rows = lastRows.filter(r => !needle || r.symbol.toLowerCase().includes(needle));
       const body = document.getElementById("rows");
       if (!rows.length) {
-        body.innerHTML = `<tr><td class="empty" colspan="12">Нет прострелов в выбранном окне</td></tr>`;
+        body.innerHTML = `<tr><td class="empty" colspan="14">Нет прострелов в выбранном окне</td></tr>`;
       } else {
         body.innerHTML = rows.map(r => `
           <tr data-symbol="${r.symbol}">
@@ -408,7 +451,9 @@
             <td class="amber">${lever(r.lever)}</td>
             <td>${r.count} <span class="down">${r.count_down}</span>/<span class="up">${r.count_up}</span></td>
             <td class="up">${r.buy_pct > 0 ? fmt(r.buy_pct) + "%" : "—"}</td>
+            <td class="up">${r.buy_v2_pct > 0 ? fmt(r.buy_v2_pct) + "%" : "—"}</td>
             <td class="down">${r.sell_pct > 0 ? fmt(r.sell_pct) + "%" : "—"}</td>
+            <td class="down">${r.sell_v2_pct > 0 ? fmt(r.sell_v2_pct) + "%" : "—"}</td>
             <td class="up">${r.buy_tp_pct > 0 ? fmt(r.buy_tp_pct) + "%" : "—"}</td>
             <td class="down">${r.sell_tp_pct > 0 ? fmt(r.sell_tp_pct) + "%" : "—"}</td>
             <td class="meta">${r.filter_hint || "—"}</td>

@@ -91,7 +91,28 @@ class Tape:
         return px or self.last
 
 
-def _sides_from_pair(pair: dict[str, Any]) -> tuple[float, float, float, float]:
+@dataclass
+class Sides:
+    buy_d: float = 0.0
+    buy_tp: float = 0.0
+    sell_d: float = 0.0
+    sell_tp: float = 0.0
+    buy_v2: float = 0.0
+    buy_v2_tp: float = 0.0
+    sell_v2: float = 0.0
+    sell_v2_tp: float = 0.0
+
+    def any(self) -> bool:
+        return self.buy_d > 0 or self.sell_d > 0
+
+    def fingerprint(self) -> str:
+        return (
+            f"{self.buy_d}|{self.buy_tp}|{self.sell_d}|{self.sell_tp}|"
+            f"{self.buy_v2}|{self.sell_v2}"
+        )
+
+
+def _sides_from_pair(pair: dict[str, Any]) -> Sides:
     """BUY из DOWN-прострелов, SHORT из UP. Старый план — одна D на обе стороны."""
     buy_d = round(float(pair.get("buy_pct") or 0), 2)
     sell_d = round(float(pair.get("sell_pct") or 0), 2)
@@ -108,7 +129,21 @@ def _sides_from_pair(pair: dict[str, Any]) -> tuple[float, float, float, float]:
     if sell_d > 0 and sell_tp + 1e-9 < MIN_TP_PCT:
         sell_d = 0.0
         sell_tp = 0.0
-    return buy_d, buy_tp, sell_d, sell_tp
+    buy_v2 = round(float(pair.get("buy_v2_pct") or 0), 2)
+    sell_v2 = round(float(pair.get("sell_v2_pct") or 0), 2)
+    buy_v2_tp = round(float(pair.get("buy_v2_tp_pct") or buy_tp or 0), 2)
+    sell_v2_tp = round(float(pair.get("sell_v2_tp_pct") or sell_tp or 0), 2)
+    if buy_v2 <= buy_d + 0.04 or buy_d <= 0:
+        buy_v2 = 0.0
+        buy_v2_tp = 0.0
+    if sell_v2 <= sell_d + 0.04 or sell_d <= 0:
+        sell_v2 = 0.0
+        sell_v2_tp = 0.0
+    if buy_v2 > 0 and buy_v2_tp + 1e-9 < MIN_TP_PCT:
+        buy_v2_tp = max(buy_tp, MIN_TP_PCT)
+    if sell_v2 > 0 and sell_v2_tp + 1e-9 < MIN_TP_PCT:
+        sell_v2_tp = max(sell_tp, MIN_TP_PCT)
+    return Sides(buy_d, buy_tp, sell_d, sell_tp, buy_v2, buy_v2_tp, sell_v2, sell_v2_tp)
 
 
 @dataclass
@@ -120,6 +155,10 @@ class Algo:
     sell_distance: float = 0.0
     buy_tp: float = 0.0
     sell_tp: float = 0.0
+    buy_v2_distance: float = 0.0
+    sell_v2_distance: float = 0.0
+    buy_v2_tp: float = 0.0
+    sell_v2_tp: float = 0.0
     lever: int = 50
     size_usdt: float = 10.0
     started_ts: int = 0
@@ -128,10 +167,18 @@ class Algo:
     sell_px: float = 0.0
     buy_id: str = ""
     sell_id: str = ""
+    buy_v2_px: float = 0.0
+    sell_v2_px: float = 0.0
+    buy_v2_id: str = ""
+    sell_v2_id: str = ""
     state: str = "hunt"
     pos_side: str = ""
     entry: float = 0.0
     fill_ts: int = 0
+    v2_state: str = "off"
+    v2_pos_side: str = ""
+    v2_entry: float = 0.0
+    v2_fill_ts: int = 0
     qty: str = "1"
     fingerprint: str = ""
 
@@ -160,12 +207,62 @@ class ShotEngine:
         self.autostop_usd = cfg.autostop_usd
         self.halted = False
         self.halt_reason = ""
+        self.trade_long = True
+        self.trade_short = True
         self.view_symbol = ""
         self.plan_pairs: list[dict[str, Any]] = []
         self.plan_error = ""
         self.plan_updated_ts = 0
+        self.runtime_path = self.data_dir / "trader_runtime.json"
         self._load_journal()
         self._rebuild_days()
+        self._load_runtime()
+
+    def _load_runtime(self) -> None:
+        if not self.runtime_path.is_file():
+            self.trade_long = bool(self.cfg.trade_long)
+            self.trade_short = bool(self.cfg.trade_short)
+            return
+        try:
+            raw = json.loads(self.runtime_path.read_text(encoding="utf-8"))
+        except Exception:
+            self.trade_long = bool(self.cfg.trade_long)
+            self.trade_short = bool(self.cfg.trade_short)
+            return
+        if "trade_long" in raw:
+            self.trade_long = bool(raw["trade_long"])
+        else:
+            self.trade_long = bool(self.cfg.trade_long)
+        if "trade_short" in raw:
+            self.trade_short = bool(raw["trade_short"])
+        else:
+            self.trade_short = bool(self.cfg.trade_short)
+        if raw.get("order_size_x20"):
+            self.order_size_x20 = max(1.0, float(raw["order_size_x20"]))
+        if raw.get("order_size_x50"):
+            self.order_size_x50 = max(1.0, float(raw["order_size_x50"]))
+            self.order_size = self.order_size_x50
+        if raw.get("autostop_usd"):
+            self.autostop_usd = max(0.5, float(raw["autostop_usd"]))
+
+    def save_runtime(self) -> None:
+        payload = {
+            "trade_long": self.trade_long,
+            "trade_short": self.trade_short,
+            "order_size_x20": self.order_size_x20,
+            "order_size_x50": self.order_size_x50,
+            "autostop_usd": self.autostop_usd,
+        }
+        tmp = self.runtime_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(self.runtime_path)
+
+    def _filter_sides(self, sides: Sides) -> Sides:
+        if not self.trade_long:
+            sides.buy_d = sides.buy_tp = sides.buy_v2 = sides.buy_v2_tp = 0.0
+        if not self.trade_short:
+            sides.sell_d = sides.sell_tp = sides.sell_v2 = sides.sell_v2_tp = 0.0
+        return sides
 
     def note(self, text: str) -> None:
         stamp = datetime.now().strftime("%H:%M:%S")
@@ -337,8 +434,8 @@ class ShotEngine:
         wanted: dict[str, dict[str, Any]] = {}
         for pair in pairs:
             symbol = str(pair.get("symbol") or "").upper()
-            buy_d, _buy_tp, sell_d, _sell_tp = _sides_from_pair(pair)
-            if not symbol or (buy_d <= 0 and sell_d <= 0):
+            sides = self._filter_sides(_sides_from_pair(pair))
+            if not symbol or not sides.any():
                 continue
             wanted[symbol] = pair
         started: list[str] = []
@@ -351,10 +448,13 @@ class ShotEngine:
             fresh = wanted.get(symbol)
             if fresh is None:
                 continue
-            buy_d, buy_tp, sell_d, sell_tp = _sides_from_pair(fresh)
-            fp = f"{buy_d}|{buy_tp}|{sell_d}|{sell_tp}"
+            sides = self._filter_sides(_sides_from_pair(fresh))
+            fp = sides.fingerprint()
             if fp != algo.fingerprint:
-                self.note(f"{symbol} новая рекомендация BUY {buy_d}/SHORT {sell_d} — перезапуск клона")
+                self.note(
+                    f"{symbol} новая рекомендация BUY {sides.buy_d}/SHORT {sides.sell_d}"
+                    f" V2 {sides.buy_v2}/{sides.sell_v2} — перезапуск клона"
+                )
                 self._kill(symbol, "replaced")
         for symbol, pair in wanted.items():
             if self.halted:
@@ -376,34 +476,46 @@ class ShotEngine:
 
     def _start(self, pair: dict[str, Any]) -> None:
         symbol = str(pair.get("symbol") or "").upper()
-        buy_d, buy_tp, sell_d, sell_tp = _sides_from_pair(pair)
+        sides = self._filter_sides(_sides_from_pair(pair))
+        if not sides.any():
+            return
         lever = int(pair.get("lever") or self.leverage) or self.leverage
         size = self.size_for_lever(lever)
         now = _now_ms()
-        dist = buy_d if buy_d > 0 else sell_d
-        tp = buy_tp if buy_d > 0 else sell_tp
+        dist = sides.buy_d if sides.buy_d > 0 else sides.sell_d
+        tp = sides.buy_tp if sides.buy_d > 0 else sides.sell_tp
+        has_v2 = sides.buy_v2 > 0 or sides.sell_v2 > 0
         algo = Algo(
             symbol=symbol,
             distance=dist,
             tp=tp,
-            buy_distance=buy_d,
-            sell_distance=sell_d,
-            buy_tp=buy_tp,
-            sell_tp=sell_tp,
+            buy_distance=sides.buy_d,
+            sell_distance=sides.sell_d,
+            buy_tp=sides.buy_tp,
+            sell_tp=sides.sell_tp,
+            buy_v2_distance=sides.buy_v2,
+            sell_v2_distance=sides.sell_v2,
+            buy_v2_tp=sides.buy_v2_tp,
+            sell_v2_tp=sides.sell_v2_tp,
             lever=lever,
             size_usdt=size,
             started_ts=now,
             until_ts=now + int(self.cfg.run_hours * 3600 * 1000),
-            fingerprint=f"{buy_d}|{buy_tp}|{sell_d}|{sell_tp}",
+            v2_state="hunt" if has_v2 else "off",
+            fingerprint=sides.fingerprint(),
         )
         self.algos[symbol] = algo
-        sides = []
-        if buy_d > 0:
-            sides.append(f"BUY D{buy_d}% TP{buy_tp}%")
-        if sell_d > 0:
-            sides.append(f"SHORT D{sell_d}% TP{sell_tp}%")
+        labels = []
+        if sides.buy_d > 0:
+            labels.append(f"BUY D{sides.buy_d}% TP{sides.buy_tp}%")
+        if sides.sell_d > 0:
+            labels.append(f"SHORT D{sides.sell_d}% TP{sides.sell_tp}%")
+        if sides.buy_v2 > 0:
+            labels.append(f"BUY V2 D{sides.buy_v2}% (+{sides.buy_v2 - sides.buy_d:g})")
+        if sides.sell_v2 > 0:
+            labels.append(f"SHORT V2 D{sides.sell_v2}% (+{sides.sell_v2 - sides.sell_d:g})")
         self.note(
-            f"старт {symbol} {' · '.join(sides) or 'нет сторон'} x{lever} size={size:g} "
+            f"старт {symbol} {' · '.join(labels) or 'нет сторон'} x{lever} size={size:g} "
             f"{'эмуляция' if self.emulate else 'LIVE'} на {self.cfg.run_hours:g}ч"
         )
 
@@ -418,12 +530,14 @@ class ShotEngine:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        if algo.buy_id:
-            loop.create_task(self.broker.cancel(symbol, algo.buy_id))
-        if algo.sell_id:
-            loop.create_task(self.broker.cancel(symbol, algo.sell_id))
+        for oid in (algo.buy_id, algo.sell_id, algo.buy_v2_id, algo.sell_v2_id):
+            if oid:
+                loop.create_task(self.broker.cancel(symbol, oid))
         if algo.state == "pos" and algo.entry > 0:
             close_side = "sell" if algo.pos_side == "buy" else "buy"
+            loop.create_task(self.broker.close_market(symbol, close_side, algo.qty))
+        if algo.v2_state == "pos" and algo.v2_entry > 0:
+            close_side = "sell" if algo.v2_pos_side == "buy" else "buy"
             loop.create_task(self.broker.close_market(symbol, close_side, algo.qty))
 
     async def follow_once(self) -> None:
@@ -434,34 +548,35 @@ class ShotEngine:
             if now >= algo.until_ts:
                 self._kill(algo.symbol, "expired")
                 continue
-            if algo.state != "hunt":
+            hunting = algo.state == "hunt" or algo.v2_state == "hunt"
+            if not hunting:
                 continue
             px = self.tapes[algo.symbol].delayed(self.cfg.follow_delay_ms, now)
             if px <= 0:
                 continue
-            buy = px * (1.0 - algo.buy_distance / 100.0) if algo.buy_distance > 0 else 0.0
-            sell = px * (1.0 + algo.sell_distance / 100.0) if algo.sell_distance > 0 else 0.0
+            buy = px * (1.0 - algo.buy_distance / 100.0) if algo.state == "hunt" and algo.buy_distance > 0 else 0.0
+            sell = px * (1.0 + algo.sell_distance / 100.0) if algo.state == "hunt" and algo.sell_distance > 0 else 0.0
+            buy_v2 = px * (1.0 - algo.buy_v2_distance / 100.0) if algo.v2_state == "hunt" and algo.buy_v2_distance > 0 else 0.0
+            sell_v2 = px * (1.0 + algo.sell_v2_distance / 100.0) if algo.v2_state == "hunt" and algo.sell_v2_distance > 0 else 0.0
             moved = 0.0
-            if buy > 0:
-                moved = max(moved, abs(buy - algo.buy_px) / px * 100.0 if algo.buy_px else 99)
-            if sell > 0:
-                moved = max(moved, abs(sell - algo.sell_px) / px * 100.0 if algo.sell_px else 99)
+            for new_px, old_px in (
+                (buy, algo.buy_px),
+                (sell, algo.sell_px),
+                (buy_v2, algo.buy_v2_px),
+                (sell_v2, algo.sell_v2_px),
+            ):
+                if new_px > 0:
+                    moved = max(moved, abs(new_px - old_px) / px * 100.0 if old_px else 99)
             if moved < 0.01:
                 continue
             algo.buy_px = buy
             algo.sell_px = sell
-            if buy <= 0 and algo.buy_id and self.broker and not self.emulate:
-                try:
-                    await self.broker.cancel(algo.symbol, algo.buy_id)
-                except Exception:
-                    pass
-                algo.buy_id = ""
-            if sell <= 0 and algo.sell_id and self.broker and not self.emulate:
-                try:
-                    await self.broker.cancel(algo.symbol, algo.sell_id)
-                except Exception:
-                    pass
-                algo.sell_id = ""
+            algo.buy_v2_px = buy_v2
+            algo.sell_v2_px = sell_v2
+            await self._sync_limit(algo, "buy_id", buy, "buy")
+            await self._sync_limit(algo, "sell_id", sell, "sell")
+            await self._sync_limit(algo, "buy_v2_id", buy_v2, "buy")
+            await self._sync_limit(algo, "sell_v2_id", sell_v2, "sell")
             if self.emulate or not (self.broker and self.broker.ready):
                 continue
             try:
@@ -479,18 +594,62 @@ class ShotEngine:
                         await self.broker.amend(algo.symbol, algo.sell_id, spx)
                     else:
                         algo.sell_id = await self.broker.place_limit(algo.symbol, "sell", spx, algo.qty)
+                if buy_v2 > 0:
+                    bpx = self.broker.round_px(algo.symbol, buy_v2)
+                    if algo.buy_v2_id:
+                        await self.broker.amend(algo.symbol, algo.buy_v2_id, bpx)
+                    else:
+                        algo.buy_v2_id = await self.broker.place_limit(algo.symbol, "buy", bpx, algo.qty)
+                if sell_v2 > 0:
+                    spx = self.broker.round_px(algo.symbol, sell_v2)
+                    if algo.sell_v2_id:
+                        await self.broker.amend(algo.symbol, algo.sell_v2_id, spx)
+                    else:
+                        algo.sell_v2_id = await self.broker.place_limit(algo.symbol, "sell", spx, algo.qty)
             except Exception as exc:
                 self.note(f"{algo.symbol} follow: {exc}")
 
-    def _check_fill(self, algo: Algo, ts: int, price: float) -> None:
-        if algo.state != "hunt" or price <= 0:
-            return
-        if algo.buy_px > 0 and price <= algo.buy_px:
-            self._enter(algo, "buy", algo.buy_px, ts)
-        elif algo.sell_px > 0 and price >= algo.sell_px:
-            self._enter(algo, "sell", algo.sell_px, ts)
+    async def _sync_limit(self, algo: Algo, attr: str, px: float, _side: str) -> None:
+        oid = getattr(algo, attr)
+        if px <= 0 and oid and self.broker and not self.emulate:
+            try:
+                await self.broker.cancel(algo.symbol, oid)
+            except Exception:
+                pass
+            setattr(algo, attr, "")
 
-    def _enter(self, algo: Algo, side: str, px: float, ts: int) -> None:
+    def _check_fill(self, algo: Algo, ts: int, price: float) -> None:
+        if price <= 0:
+            return
+        if algo.state == "hunt":
+            if algo.buy_px > 0 and price <= algo.buy_px:
+                self._enter(algo, "buy", algo.buy_px, ts, "v1")
+            elif algo.sell_px > 0 and price >= algo.sell_px:
+                self._enter(algo, "sell", algo.sell_px, ts, "v1")
+        if algo.v2_state == "hunt":
+            if algo.buy_v2_px > 0 and price <= algo.buy_v2_px:
+                self._enter(algo, "buy", algo.buy_v2_px, ts, "v2")
+            elif algo.sell_v2_px > 0 and price >= algo.sell_v2_px:
+                self._enter(algo, "sell", algo.sell_v2_px, ts, "v2")
+
+    def _enter(self, algo: Algo, side: str, px: float, ts: int, layer: str = "v1") -> None:
+        if layer == "v2":
+            algo.v2_state = "pos"
+            algo.v2_pos_side = side
+            algo.v2_entry = px
+            algo.v2_fill_ts = ts
+            other = algo.sell_v2_id if side == "buy" else algo.buy_v2_id
+            if not self.emulate and self.broker and other:
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(self.broker.cancel(algo.symbol, other))
+                except RuntimeError:
+                    pass
+            algo.buy_v2_id = ""
+            algo.sell_v2_id = ""
+            d = algo.buy_v2_distance if side == "buy" else algo.sell_v2_distance
+            self.note(f"вход V2 {algo.symbol} {side.upper()} @ {px:.6g} D{d}% size={algo.size_usdt:g}$")
+            return
         algo.state = "pos"
         algo.pos_side = side
         algo.entry = px
@@ -512,34 +671,57 @@ class ShotEngine:
         self.note(f"вход {algo.symbol} {side.upper()} @ {px:.6g} D{d}% size={algo.size_usdt:g}$")
 
     def _maybe_exit(self, algo: Algo, ts: int, price: float) -> None:
-        if algo.state != "pos" or algo.entry <= 0:
+        if algo.state == "pos" and algo.entry > 0:
+            self._maybe_exit_layer(algo, ts, price, "v1")
+        if algo.v2_state == "pos" and algo.v2_entry > 0:
+            self._maybe_exit_layer(algo, ts, price, "v2")
+
+    def _maybe_exit_layer(self, algo: Algo, ts: int, price: float, layer: str) -> None:
+        if layer == "v2":
+            side, entry, fill_ts = algo.v2_pos_side, algo.v2_entry, algo.v2_fill_ts
+            tp = algo.buy_v2_tp if side == "buy" else algo.sell_v2_tp
+        else:
+            side, entry, fill_ts = algo.pos_side, algo.entry, algo.fill_ts
+            tp = algo.buy_tp if side == "buy" else algo.sell_tp
+        if entry <= 0:
             return
-        favor = (price - algo.entry) / algo.entry * 100.0 if algo.pos_side == "buy" else (algo.entry - price) / algo.entry * 100.0
-        tp = algo.buy_tp if algo.pos_side == "buy" else algo.sell_tp
+        favor = (price - entry) / entry * 100.0 if side == "buy" else (entry - price) / entry * 100.0
         tp = max(tp, MIN_TP_PCT)
         hit_tp = tp > 0 and favor + 1e-12 >= tp
-        timed = ts - algo.fill_ts >= self.cfg.hold_ms
+        timed = ts - fill_ts >= self.cfg.hold_ms
         if not hit_tp and not timed:
             return
-        exit_px = algo.entry * (1 + tp / 100.0) if hit_tp and algo.pos_side == "buy" else (
-            algo.entry * (1 - tp / 100.0) if hit_tp else price
+        exit_px = entry * (1 + tp / 100.0) if hit_tp and side == "buy" else (
+            entry * (1 - tp / 100.0) if hit_tp else price
         )
-        self._close(algo, exit_px, "TP" if hit_tp else "0.3с")
+        tag = "TP" if hit_tp else "0.3с"
+        if layer == "v2":
+            tag = f"V2 {tag}"
+        self._close(algo, exit_px, tag, layer)
 
-    def _close(self, algo: Algo, exit_px: float, why: str) -> None:
-        pnl = _pnl_usd(algo.pos_side, algo.entry, exit_px, algo.size_usdt)
-        pct = _pnl_pct(algo.pos_side, algo.entry, exit_px)
+    def _close(self, algo: Algo, exit_px: float, why: str, layer: str = "v1") -> None:
+        if layer == "v2":
+            side, entry = algo.v2_pos_side, algo.v2_entry
+            distance = algo.buy_v2_distance if side == "buy" else algo.sell_v2_distance
+            tp = algo.buy_v2_tp if side == "buy" else algo.sell_v2_tp
+        else:
+            side, entry = algo.pos_side, algo.entry
+            distance = algo.buy_distance if side == "buy" else algo.sell_distance
+            tp = algo.buy_tp if side == "buy" else algo.sell_tp
+        pnl = _pnl_usd(side, entry, exit_px, algo.size_usdt)
+        pct = _pnl_pct(side, entry, exit_px)
         row = {
             "ts": _now_ms(),
             "symbol": algo.symbol,
-            "side": algo.pos_side,
-            "entry": algo.entry,
+            "side": side,
+            "entry": entry,
             "exit": exit_px,
             "pnl_usd": pnl,
             "pnl_pct": pct,
             "why": why,
-            "distance": algo.buy_distance if algo.pos_side == "buy" else algo.sell_distance,
-            "tp": algo.buy_tp if algo.pos_side == "buy" else algo.sell_tp,
+            "layer": layer,
+            "distance": distance,
+            "tp": tp,
             "size_usdt": algo.size_usdt,
             "lever": int(algo.lever or 0),
             "emulate": self.emulate,
@@ -548,27 +730,41 @@ class ShotEngine:
         if not self.emulate and self.broker and self.broker.ready:
             try:
                 loop = asyncio.get_running_loop()
-                close_side = "sell" if algo.pos_side == "buy" else "buy"
+                close_side = "sell" if side == "buy" else "buy"
                 loop.create_task(self.broker.close_market(algo.symbol, close_side, algo.qty))
             except RuntimeError:
                 pass
-        self.note(f"выход {algo.symbol} {why} pnl {pnl:+.2f}$")
-        algo.state = "hunt"
-        algo.pos_side = ""
-        algo.entry = 0.0
-        algo.fill_ts = 0
-        algo.buy_px = 0.0
-        algo.sell_px = 0.0
+        tag = "V2 " if layer == "v2" else ""
+        self.note(f"выход {tag}{algo.symbol} {why} pnl {pnl:+.2f}$")
+        if layer == "v2":
+            algo.v2_state = "hunt" if (algo.buy_v2_distance > 0 or algo.sell_v2_distance > 0) else "off"
+            algo.v2_pos_side = ""
+            algo.v2_entry = 0.0
+            algo.v2_fill_ts = 0
+            algo.buy_v2_px = 0.0
+            algo.sell_v2_px = 0.0
+        else:
+            algo.state = "hunt"
+            algo.pos_side = ""
+            algo.entry = 0.0
+            algo.fill_ts = 0
+            algo.buy_px = 0.0
+            algo.sell_px = 0.0
         if pnl <= -self.autostop_usd:
             self.emergency(f"сделка {algo.symbol} {pnl:.2f}$ ≤ -{self.autostop_usd:g}$")
 
     def _check_open_loss(self, algo: Algo, price: float) -> None:
-        if algo.state != "pos" or algo.entry <= 0:
-            return
-        pnl = _pnl_usd(algo.pos_side, algo.entry, price, algo.size_usdt)
-        if pnl <= -self.autostop_usd:
-            self._close(algo, price, "autostop")
-            self.emergency(f"открытый минус {algo.symbol} {pnl:.2f}$")
+        if algo.state == "pos" and algo.entry > 0:
+            pnl = _pnl_usd(algo.pos_side, algo.entry, price, algo.size_usdt)
+            if pnl <= -self.autostop_usd:
+                self._close(algo, price, "autostop", "v1")
+                self.emergency(f"открытый минус {algo.symbol} {pnl:.2f}$")
+                return
+        if algo.v2_state == "pos" and algo.v2_entry > 0:
+            pnl = _pnl_usd(algo.v2_pos_side, algo.v2_entry, price, algo.size_usdt)
+            if pnl <= -self.autostop_usd:
+                self._close(algo, price, "autostop", "v2")
+                self.emergency(f"открытый минус V2 {algo.symbol} {pnl:.2f}$")
 
     def emergency(self, reason: str) -> None:
         if self.halted:
@@ -585,25 +781,60 @@ class ShotEngine:
         self.note("авто-стоп снят, жду новые записи плана")
 
     def apply_runtime_settings(self) -> None:
-        """Протянуть размеры x20/x50 на активные клоны. Плечо пары не трогаем."""
-        for algo in self.algos.values():
-            if algo.state != "hunt":
-                continue
-            algo.size_usdt = self.size_for_lever(algo.lever)
+        """Протянуть размеры x20/x50 и направления на активные клоны."""
+        for algo in list(self.algos.values()):
+            if algo.state == "hunt":
+                algo.size_usdt = self.size_for_lever(algo.lever)
+            self._apply_directions_to_algo(algo)
             if not self.emulate and self.broker and self.broker.ready:
                 try:
                     loop = asyncio.get_running_loop()
-                    if algo.buy_id:
-                        loop.create_task(self.broker.cancel(algo.symbol, algo.buy_id))
-                    if algo.sell_id:
-                        loop.create_task(self.broker.cancel(algo.symbol, algo.sell_id))
+                    for attr in ("buy_id", "sell_id", "buy_v2_id", "sell_v2_id"):
+                        oid = getattr(algo, attr)
+                        if oid:
+                            loop.create_task(self.broker.cancel(algo.symbol, oid))
                 except RuntimeError:
                     pass
-            algo.buy_id = ""
-            algo.sell_id = ""
-            algo.buy_px = 0.0
-            algo.sell_px = 0.0
+            algo.buy_id = algo.sell_id = algo.buy_v2_id = algo.sell_v2_id = ""
+            if algo.state == "hunt":
+                algo.buy_px = 0.0
+                algo.sell_px = 0.0
+            if algo.v2_state == "hunt":
+                algo.buy_v2_px = 0.0
+                algo.sell_v2_px = 0.0
             algo.qty = "1"
+            if (
+                algo.state != "pos"
+                and algo.v2_state != "pos"
+                and algo.buy_distance <= 0
+                and algo.sell_distance <= 0
+            ):
+                self._kill(algo.symbol, "direction-off")
+        self.save_runtime()
+
+    def _apply_directions_to_algo(self, algo: Algo) -> None:
+        if not self.trade_long:
+            if algo.state == "hunt":
+                algo.buy_distance = 0.0
+                algo.buy_tp = 0.0
+                algo.buy_px = 0.0
+            if algo.v2_state == "hunt":
+                algo.buy_v2_distance = 0.0
+                algo.buy_v2_tp = 0.0
+                algo.buy_v2_px = 0.0
+        if not self.trade_short:
+            if algo.state == "hunt":
+                algo.sell_distance = 0.0
+                algo.sell_tp = 0.0
+                algo.sell_px = 0.0
+            if algo.v2_state == "hunt":
+                algo.sell_v2_distance = 0.0
+                algo.sell_v2_tp = 0.0
+                algo.sell_v2_px = 0.0
+        if algo.v2_state != "pos" and algo.buy_v2_distance <= 0 and algo.sell_v2_distance <= 0:
+            algo.v2_state = "off"
+        elif algo.v2_state == "off" and (algo.buy_v2_distance > 0 or algo.sell_v2_distance > 0):
+            algo.v2_state = "hunt"
 
     def day_trades(self) -> list[dict[str, Any]]:
         """Сделки текущих суток (по TZ) — для окна журнала."""
@@ -645,12 +876,13 @@ class ShotEngine:
     def unrealized(self) -> float:
         total = 0.0
         for algo in self.algos.values():
-            if algo.state != "pos" or algo.entry <= 0:
-                continue
             last = self.tapes[algo.symbol].last
             if last <= 0:
                 continue
-            total += _pnl_usd(algo.pos_side, algo.entry, last, algo.size_usdt)
+            if algo.state == "pos" and algo.entry > 0:
+                total += _pnl_usd(algo.pos_side, algo.entry, last, algo.size_usdt)
+            if algo.v2_state == "pos" and algo.v2_entry > 0:
+                total += _pnl_usd(algo.v2_pos_side, algo.v2_entry, last, algo.size_usdt)
         return round(total, 4)
 
     @staticmethod
@@ -666,10 +898,15 @@ class ShotEngine:
         notional = 0.0
         for algo in algos if algos is not None else self.algos.values():
             one = self._side_margin(algo)
+            n = 0
             if algo.state == "pos":
-                n = 1
+                n += 1
             else:
-                n = int(algo.buy_distance > 0) + int(algo.sell_distance > 0)
+                n += int(algo.buy_distance > 0) + int(algo.sell_distance > 0)
+            if algo.v2_state == "pos":
+                n += 1
+            elif algo.v2_state == "hunt":
+                n += int(algo.buy_v2_distance > 0) + int(algo.sell_v2_distance > 0)
             if n <= 0:
                 continue
             pairs += 1
@@ -694,15 +931,30 @@ class ShotEngine:
             last = float(self.tapes[a.symbol].last or 0)
             buy_dist = ((last - a.buy_px) / last * 100.0) if last > 0 and a.buy_px > 0 else None
             sell_dist = ((a.sell_px - last) / last * 100.0) if last > 0 and a.sell_px > 0 else None
+            buy_v2_dist = ((last - a.buy_v2_px) / last * 100.0) if last > 0 and a.buy_v2_px > 0 else None
+            sell_v2_dist = ((a.sell_v2_px - last) / last * 100.0) if last > 0 and a.sell_v2_px > 0 else None
             u_pnl = 0.0
+            u_pnl_v2 = 0.0
             in_trade = 0.0
             if a.state == "pos" and a.entry > 0:
-                in_trade = a.size_usdt
+                in_trade += a.size_usdt
                 if last > 0:
                     u_pnl = _pnl_usd(a.pos_side, a.entry, last, a.size_usdt)
+            if a.v2_state == "pos" and a.v2_entry > 0:
+                in_trade += a.size_usdt
+                if last > 0:
+                    u_pnl_v2 = _pnl_usd(a.v2_pos_side, a.v2_entry, last, a.size_usdt)
             sc = self.symbol_today(a.symbol)
             margin = self._side_margin(a)
-            frozen_sides = 1 if a.state == "pos" else int(a.buy_distance > 0) + int(a.sell_distance > 0)
+            frozen_sides = 0
+            if a.state == "pos":
+                frozen_sides += 1
+            else:
+                frozen_sides += int(a.buy_distance > 0) + int(a.sell_distance > 0)
+            if a.v2_state == "pos":
+                frozen_sides += 1
+            elif a.v2_state == "hunt":
+                frozen_sides += int(a.buy_v2_distance > 0) + int(a.sell_v2_distance > 0)
             markets.append(
                 {
                     "symbol": a.symbol,
@@ -710,9 +962,13 @@ class ShotEngine:
                     "distance": a.distance,
                     "buy_distance": a.buy_distance,
                     "sell_distance": a.sell_distance,
+                    "buy_v2_distance": a.buy_v2_distance,
+                    "sell_v2_distance": a.sell_v2_distance,
                     "tp": a.tp,
                     "buy_tp": a.buy_tp,
                     "sell_tp": a.sell_tp,
+                    "buy_v2_tp": a.buy_v2_tp,
+                    "sell_v2_tp": a.sell_v2_tp,
                     "lever": a.lever,
                     "size_usdt": a.size_usdt,
                     "margin_usdt": round(margin, 4),
@@ -725,11 +981,19 @@ class ShotEngine:
                     "state": a.state,
                     "side": a.pos_side,
                     "entry": a.entry,
+                    "v2_state": a.v2_state,
+                    "v2_side": a.v2_pos_side,
+                    "v2_entry": a.v2_entry,
                     "buy": a.buy_px,
                     "sell": a.sell_px,
+                    "buy_v2": a.buy_v2_px,
+                    "sell_v2": a.sell_v2_px,
                     "buy_dist_pct": None if buy_dist is None else round(buy_dist, 4),
                     "sell_dist_pct": None if sell_dist is None else round(sell_dist, 4),
+                    "buy_v2_dist_pct": None if buy_v2_dist is None else round(buy_v2_dist, 4),
+                    "sell_v2_dist_pct": None if sell_v2_dist is None else round(sell_v2_dist, 4),
                     "unrealized": round(u_pnl, 4),
+                    "unrealized_v2": round(u_pnl_v2, 4),
                     "left_min": max(0, int((a.until_ts - _now_ms()) / 60000)),
                 }
             )
@@ -746,6 +1010,8 @@ class ShotEngine:
             "order_size_x50": self.order_size_x50,
             "leverage": self.leverage,
             "autostop_usd": self.autostop_usd,
+            "trade_long": self.trade_long,
+            "trade_short": self.trade_short,
             "follow_delay_ms": self.cfg.follow_delay_ms,
             "hold_ms": self.cfg.hold_ms,
             "run_hours": self.cfg.run_hours,

@@ -287,6 +287,8 @@ class ShotStore:
                 suggest, plus_n, minus_n, win_prob, suggest_tp, filter_hint = (
                     sell_d, sell_plus, sell_minus, sell_win, sell_tp, (f"SHORT {sell_hint}".strip() if sell_d else "")
                 )
+            buy_v2, buy_v2_gap, buy_v2_n = _insurance_distance(down_shots, buy_d)
+            sell_v2, sell_v2_gap, sell_v2_n = _insurance_distance(up_shots, sell_d)
             rows.append(
                 {
                     "symbol": symbol,
@@ -308,11 +310,19 @@ class ShotStore:
                     "buy_win_prob": buy_win,
                     "buy_score_text": f"{buy_plus}/{buy_minus}" if buy_d else "",
                     "buy_filter_hint": buy_hint,
+                    "buy_v2_pct": buy_v2,
+                    "buy_v2_gap": buy_v2_gap,
+                    "buy_v2_n": buy_v2_n,
+                    "buy_v2_tp_pct": buy_tp if buy_v2 > 0 else 0.0,
                     "sell_pct": sell_d,
                     "sell_tp_pct": sell_tp,
                     "sell_win_prob": sell_win,
                     "sell_score_text": f"{sell_plus}/{sell_minus}" if sell_d else "",
                     "sell_filter_hint": sell_hint,
+                    "sell_v2_pct": sell_v2,
+                    "sell_v2_gap": sell_v2_gap,
+                    "sell_v2_n": sell_v2_n,
+                    "sell_v2_tp_pct": sell_tp if sell_v2 > 0 else 0.0,
                     "filter_hint": filter_hint,
                     "score_plus": plus_n,
                     "score_minus": minus_n,
@@ -332,11 +342,27 @@ class ShotStore:
         rows.sort(key=lambda row: (row["count"], row["last_ts"]), reverse=True)
         all_pct = [float(x["percent"]) for x in items]
         vplus_n = sum(1 for x in items if x["vplus"])
+        buy_recs = [float(r["buy_pct"]) for r in rows if float(r.get("buy_pct") or 0) > 0]
+        sell_recs = [float(r["sell_pct"]) for r in rows if float(r.get("sell_pct") or 0) > 0]
+        buy_tps = [float(r["buy_tp_pct"]) for r in rows if float(r.get("buy_pct") or 0) > 0 and float(r.get("buy_tp_pct") or 0) > 0]
+        sell_tps = [float(r["sell_tp_pct"]) for r in rows if float(r.get("sell_pct") or 0) > 0 and float(r.get("sell_tp_pct") or 0) > 0]
+        buy_v2s = [float(r["buy_v2_pct"]) for r in rows if float(r.get("buy_v2_pct") or 0) > 0]
+        sell_v2s = [float(r["sell_v2_pct"]) for r in rows if float(r.get("sell_v2_pct") or 0) > 0]
         payload = {
             "lookback_min": lookback_min,
             "shots": len(items),
             "pairs": len(rows),
             "avg": round(statistics.fmean(all_pct), 4) if all_pct else 0.0,
+            "avg_buy_pct": round(statistics.fmean(buy_recs), 4) if buy_recs else 0.0,
+            "avg_sell_pct": round(statistics.fmean(sell_recs), 4) if sell_recs else 0.0,
+            "avg_buy_tp_pct": round(statistics.fmean(buy_tps), 4) if buy_tps else 0.0,
+            "avg_sell_tp_pct": round(statistics.fmean(sell_tps), 4) if sell_tps else 0.0,
+            "avg_buy_v2_pct": round(statistics.fmean(buy_v2s), 4) if buy_v2s else 0.0,
+            "avg_sell_v2_pct": round(statistics.fmean(sell_v2s), 4) if sell_v2s else 0.0,
+            "rec_buy_n": len(buy_recs),
+            "rec_sell_n": len(sell_recs),
+            "rec_buy_v2_n": len(buy_v2s),
+            "rec_sell_v2_n": len(sell_v2s),
             "vplus": vplus_n,
             "vplus_rate": round(100.0 * vplus_n / len(items), 1) if items else 0.0,
             "hold_ms": items[-1]["hold_ms"] if items else 300,
@@ -362,8 +388,10 @@ class ShotStore:
                     "suggest_tp_pct",
                     "buy_pct",
                     "buy_tp_pct",
+                    "buy_v2_pct",
                     "sell_pct",
                     "sell_tp_pct",
+                    "sell_v2_pct",
                     "filter_hint",
                     "score_plus",
                     "score_minus",
@@ -400,12 +428,26 @@ class ShotStore:
             sell_pct = round(float(row.get("sell_pct") or 0), 4)
             buy_tp = round(float(row.get("buy_tp_pct") or 0), 4)
             sell_tp = round(float(row.get("sell_tp_pct") or 0), 4)
+            buy_v2 = round(float(row.get("buy_v2_pct") or 0), 4)
+            sell_v2 = round(float(row.get("sell_v2_pct") or 0), 4)
+            buy_v2_gap = round(float(row.get("buy_v2_gap") or 0), 4)
+            sell_v2_gap = round(float(row.get("sell_v2_gap") or 0), 4)
             if buy_pct > 0 and buy_tp + 1e-9 < self.tp_min_pct:
                 buy_pct = 0.0
                 buy_tp = 0.0
+                buy_v2 = 0.0
+                buy_v2_gap = 0.0
             if sell_pct > 0 and sell_tp + 1e-9 < self.tp_min_pct:
                 sell_pct = 0.0
                 sell_tp = 0.0
+                sell_v2 = 0.0
+                sell_v2_gap = 0.0
+            if buy_v2 <= buy_pct + 1e-9:
+                buy_v2 = 0.0
+                buy_v2_gap = 0.0
+            if sell_v2 <= sell_pct + 1e-9:
+                sell_v2 = 0.0
+                sell_v2_gap = 0.0
             recommend = round(float(row.get("suggest_distance") or 0), 4)
             tp = round(float(row.get("suggest_tp_pct") or 0), 4)
             if recommend > 0 and tp + 1e-9 < self.tp_min_pct:
@@ -425,9 +467,15 @@ class ShotStore:
                     "buy_pct": buy_pct,
                     "buy_tp_pct": buy_tp,
                     "buy_win_prob": float(row.get("buy_win_prob") or 0),
+                    "buy_v2_pct": buy_v2,
+                    "buy_v2_gap": buy_v2_gap,
+                    "buy_v2_tp_pct": buy_tp if buy_v2 > 0 else 0.0,
                     "sell_pct": sell_pct,
                     "sell_tp_pct": sell_tp,
                     "sell_win_prob": float(row.get("sell_win_prob") or 0),
+                    "sell_v2_pct": sell_v2,
+                    "sell_v2_gap": sell_v2_gap,
+                    "sell_v2_tp_pct": sell_tp if sell_v2 > 0 else 0.0,
                     "hold_ms": hold_ms,
                     "run_hours": hours,
                     "lever": int(round(float(row.get("lever") or 0))),
@@ -440,12 +488,16 @@ class ShotStore:
                 }
             )
         return {
-            "schema": "shotcore.mt_plan.v2",
+            "schema": "shotcore.mt_plan.v3",
             "updated_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "updated_ts": int(now.timestamp() * 1000),
             "run_hours": hours,
             "hold_ms": hold_ms,
             "lookback_min": int(payload.get("lookback_min") or lookback_min or 0),
+            "avg_buy_pct": float(payload.get("avg_buy_pct") or 0),
+            "avg_sell_pct": float(payload.get("avg_sell_pct") or 0),
+            "rec_buy_n": int(payload.get("rec_buy_n") or 0),
+            "rec_sell_n": int(payload.get("rec_sell_n") or 0),
             "pairs": pairs,
         }
 
@@ -470,8 +522,10 @@ class ShotStore:
             "tp_pct",
             "buy_pct",
             "buy_tp_pct",
+            "buy_v2_pct",
             "sell_pct",
             "sell_tp_pct",
+            "sell_v2_pct",
             "hold_ms",
             "run_hours",
             "lever",
@@ -493,8 +547,10 @@ class ShotStore:
                     "tp_pct": pair["tp_pct"],
                     "buy_pct": pair.get("buy_pct") or 0,
                     "buy_tp_pct": pair.get("buy_tp_pct") or 0,
+                    "buy_v2_pct": pair.get("buy_v2_pct") or 0,
                     "sell_pct": pair.get("sell_pct") or 0,
                     "sell_tp_pct": pair.get("sell_tp_pct") or 0,
+                    "sell_v2_pct": pair.get("sell_v2_pct") or 0,
                     "hold_ms": pair["hold_ms"],
                     "run_hours": pair["run_hours"],
                     "lever": pair["lever"],
@@ -523,6 +579,60 @@ class ShotStore:
                 continue
             out.append(item)
         return out
+
+    def apply_algo(self, updates: dict[str, Any]) -> dict[str, Any]:
+        """Горячая правка порогов рекомендации. Следующий stats/план уже новый."""
+        mapping = {
+            "min_win_pct": ("min_win_pct", float, 0.0, 100.0),
+            "min_fills": ("min_fills", int, 1, 50),
+            "tp_min_pct": ("tp_min_pct", float, 0.3, 5.0),
+            "hold_ms": ("hold_ms", int, 50, 5000),
+            "suggest_inside_pct": ("suggest_inside_pct", float, 0.0, 1.0),
+            "suggest_inside_max_pct": ("suggest_inside_max_pct", float, 0.0, 2.0),
+            "distance_levels": ("distance_levels", None, None, None),
+        }
+        changed: dict[str, Any] = {}
+        for key, (attr, caster, lo, hi) in mapping.items():
+            if key not in updates or updates[key] in (None, ""):
+                continue
+            raw = updates[key]
+            if key == "distance_levels":
+                if isinstance(raw, str):
+                    parts = [p.strip() for p in raw.replace(";", ",").split(",") if p.strip()]
+                    vals = [round(float(p), 2) for p in parts if float(p) > 0]
+                elif isinstance(raw, (list, tuple)):
+                    vals = [round(float(p), 2) for p in raw if float(p) > 0]
+                else:
+                    continue
+                if vals:
+                    self.distance_levels = vals
+                    changed[key] = vals
+                continue
+            val = caster(raw)
+            if lo is not None:
+                val = max(lo, val)
+            if hi is not None:
+                val = min(hi, val)
+            setattr(self, attr, val)
+            changed[key] = getattr(self, attr)
+        if "suggest_inside_max_pct" in changed or "suggest_inside_pct" in changed:
+            self.suggest_inside_max_pct = max(self.suggest_inside_max_pct, self.suggest_inside_pct)
+            changed["suggest_inside_pct"] = self.suggest_inside_pct
+            changed["suggest_inside_max_pct"] = self.suggest_inside_max_pct
+        if changed:
+            self._stats_memo = None
+        return self.algo_public()
+
+    def algo_public(self) -> dict[str, Any]:
+        return {
+            "min_win_pct": self.min_win_pct,
+            "min_fills": self.min_fills,
+            "tp_min_pct": self.tp_min_pct,
+            "hold_ms": self.hold_ms,
+            "suggest_inside_pct": self.suggest_inside_pct,
+            "suggest_inside_max_pct": self.suggest_inside_max_pct,
+            "distance_levels": list(self.distance_levels),
+        }
 
     def prune(self) -> int:
         cutoff = _cutoff_ms(self.retain_hours)
@@ -642,6 +752,29 @@ def _recommend_and_score(
     minus = int(filled) - plus
     prob = round(100.0 * plus / filled, 1) if filled else 0.0
     return round(distance, 2), plus, minus, prob, round(tp, 2), hint
+
+
+def _insurance_distance(
+    shots: list[dict[str, Any]],
+    recommend_d: float,
+    min_samples: int = 2,
+) -> tuple[float, float, int]:
+    """V2: среднее прострелов глубже рекомендации. gap = V2 − D."""
+    rec = float(recommend_d or 0)
+    if rec <= 0:
+        return 0.0, 0.0, 0
+    bigger = [
+        float(row.get("percent") or 0)
+        for row in shots
+        if float(row.get("percent") or 0) > rec + 1e-9
+    ]
+    if len(bigger) < min_samples:
+        return 0.0, 0.0, 0
+    v2 = round(statistics.fmean(bigger), 2)
+    gap = round(v2 - rec, 2)
+    if gap < 0.05 or v2 <= rec:
+        return 0.0, 0.0, 0
+    return v2, gap, len(bigger)
 
 
 def _search_dtp(

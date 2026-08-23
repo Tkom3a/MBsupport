@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY shottrader ./shottrader
 COPY mbauth ./mbauth
+COPY shotcli ./shotcli
 
 RUN mkdir -p /app/data /app/logs
 EXPOSE 4863

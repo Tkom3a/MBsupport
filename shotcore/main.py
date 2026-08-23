@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import signal
 import sys
 import time
+from typing import Any
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
@@ -61,6 +63,100 @@ class ShotCore:
         )
         self._session: aiohttp.ClientSession | None = None
         self._tg_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._algo_path = root / cfg.output.dir / "algo_runtime.json"
+        self._load_algo_runtime()
+
+    def _load_algo_runtime(self) -> None:
+        if not self._algo_path.is_file():
+            return
+        try:
+            raw = json.loads(self._algo_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        if isinstance(raw, dict):
+            self.apply_algo(raw, persist=False)
+
+    def algo_snapshot(self) -> dict[str, Any]:
+        shot = self.cfg.shot
+        payload = self.store.algo_public()
+        payload.update(
+            {
+                "min_percent": shot.min_percent,
+                "min_trades": shot.min_trades,
+                "min_quote_volume": shot.min_quote_volume,
+                "cooldown_ms": shot.cooldown_ms,
+                "windows_ms": list(shot.windows_ms),
+                "recover_ratio": shot.recover_ratio,
+                "refractory_ms": shot.refractory_ms,
+            }
+        )
+        return payload
+
+    def apply_algo(self, updates: dict[str, Any], persist: bool = True) -> dict[str, Any]:
+        store_keys = {
+            "min_win_pct",
+            "min_fills",
+            "tp_min_pct",
+            "hold_ms",
+            "suggest_inside_pct",
+            "suggest_inside_max_pct",
+            "distance_levels",
+        }
+        self.store.apply_algo({k: updates[k] for k in store_keys if k in updates})
+        shot = self.cfg.shot
+        if "min_percent" in updates and updates["min_percent"] not in (None, ""):
+            shot.min_percent = max(0.1, float(updates["min_percent"]))
+        if "min_trades" in updates and updates["min_trades"] not in (None, ""):
+            shot.min_trades = max(1, int(float(updates["min_trades"])))
+        if "min_quote_volume" in updates and updates["min_quote_volume"] not in (None, ""):
+            shot.min_quote_volume = max(0.0, float(updates["min_quote_volume"]))
+        if "cooldown_ms" in updates and updates["cooldown_ms"] not in (None, ""):
+            shot.cooldown_ms = max(100, int(float(updates["cooldown_ms"])))
+        if "windows_ms" in updates and updates["windows_ms"] not in (None, ""):
+            raw = updates["windows_ms"]
+            if isinstance(raw, str):
+                parts = [p.strip() for p in raw.replace(";", ",").split(",") if p.strip()]
+                vals = [int(float(p)) for p in parts if float(p) > 0]
+            elif isinstance(raw, (list, tuple)):
+                vals = [int(float(p)) for p in raw if float(p) > 0]
+            else:
+                vals = []
+            if vals:
+                shot.windows_ms = vals
+        if "hold_ms" in updates and updates["hold_ms"] not in (None, ""):
+            shot.hold_ms = max(50, int(float(updates["hold_ms"])))
+        if "tp_min_pct" in updates and updates["tp_min_pct"] not in (None, ""):
+            shot.tp_min_pct = max(0.3, float(updates["tp_min_pct"]))
+            shot.vplus_min_pnl = shot.tp_min_pct
+        if "suggest_inside_pct" in updates and updates["suggest_inside_pct"] not in (None, ""):
+            shot.suggest_inside_pct = max(0.0, float(updates["suggest_inside_pct"]))
+        if "suggest_inside_max_pct" in updates and updates["suggest_inside_max_pct"] not in (None, ""):
+            shot.suggest_inside_max_pct = max(shot.suggest_inside_pct, float(updates["suggest_inside_max_pct"]))
+        if "distance_levels" in updates:
+            shot.distance_levels = list(self.store.distance_levels)
+        if "min_win_pct" in updates and updates["min_win_pct"] not in (None, ""):
+            shot.min_win_pct = max(0.0, min(100.0, float(updates["min_win_pct"])))
+        if "min_fills" in updates and updates["min_fills"] not in (None, ""):
+            shot.min_fills = max(1, int(float(updates["min_fills"])))
+        for det in self.detectors.values():
+            det.min_percent = shot.min_percent
+            det.min_trades = shot.min_trades
+            det.min_quote_volume = shot.min_quote_volume
+            det.cooldown_ms = shot.cooldown_ms
+            det.windows_ms = sorted(shot.windows_ms)
+            det.hold_ms = shot.hold_ms
+            det.distance_levels = list(shot.distance_levels)
+            det.tp_min_pct = shot.tp_min_pct
+            det.vplus_min_pnl = shot.vplus_min_pnl
+            det.suggest_inside_pct = shot.suggest_inside_pct
+            det.max_keep_ms = max(det.windows_ms) + det.cooldown_ms + det.hold_ms + 20000
+        if persist:
+            self._algo_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._algo_path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(self.algo_snapshot(), ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(self._algo_path)
+            log.info("Algo runtime updated: %s", self.algo_snapshot())
+        return self.algo_snapshot()
 
     def _detector(self, symbol: str) -> SymbolDetector:
         det = self.detectors.get(symbol)
