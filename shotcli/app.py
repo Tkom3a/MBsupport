@@ -33,6 +33,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--trader", default="", help="URL ShotTrader, по умолчанию SHOTTRADER_URL или :4863")
     parser.add_argument("--core-token", default="", help="токен ShotCore (или SHOTCORE_TOKEN)")
     parser.add_argument("--trader-token", default="", help="токен ShotTrader (или TRADER_TOKEN)")
+    parser.add_argument("--user", default="", help="логин, если AUTH_MODE=local/ldap")
+    parser.add_argument("--password", default="", help="пароль к логину")
     sub = parser.add_subparsers(dest="cmd")
 
     sub.add_parser("menu", help="интерактивное меню (по умолчанию)")
@@ -61,7 +63,10 @@ def main(argv: list[str] | None = None) -> None:
         trader_url=args.trader or None,
         core_token=args.core_token or None,
         trader_token=args.trader_token or None,
+        username=args.user,
+        password=args.password,
     )
+    cli.ensure_auth()
     cmd = args.cmd or "menu"
     try:
         if cmd == "menu":

@@ -8,27 +8,35 @@ CLI **не поднимает** ядро и терминал. Он ходит в
 ShotCore :4861  ← разведка, средние D, алгоритм
 ShotTrader :4863 ← ордера, лонг/шорт, размеры, panic
         ↑
-   python -m shotcli
+   python3 -m shotcli
 ```
+
+На Ubuntu пакет называется `python3`. Команды `python` там нет — это не ошибка установки.
 
 ---
 
 ## Запуск на сервере
 
-Из **корня репозитория**, рядом с уже работающими `python -m shotcore` и `python -m shottrader` (или Docker).
+Из **корня репозитория**, рядом с уже работающими ShotCore и ShotTrader (или Docker).
 
 ```bash
-cd /opt/MBsupport          # ваш путь
-source .venv/bin/activate  # если ставили venv
-python -m shotcli
+cd /home/bcore/MBsupport    # ваш путь
+python3 -m shotcli
 ```
 
-Откроется интерактивное меню.
-
-Docker (сервисы уже `up`):
+или:
 
 ```bash
-docker compose exec shottrader python -m shotcli \
+chmod +x shotcli.sh
+./shotcli.sh
+```
+
+Откроется интерактивное меню. `pip` тут не нужен.
+
+Если сервисы в Docker:
+
+```bash
+docker compose exec shottrader python3 -m shotcli \
   --core http://shotcore:4861 \
   --trader http://127.0.0.1:4863
 ```
@@ -40,7 +48,7 @@ export SHOTCORE_URL=http://127.0.0.1:4861
 export SHOTTRADER_URL=http://127.0.0.1:4863
 # если на ядре включён WEB_TOKEN / AUTH:
 export SHOTCORE_TOKEN=тот-же-секрет
-python -m shotcli
+python3 -m shotcli
 ```
 
 ---
@@ -71,29 +79,29 @@ python -m shotcli
 Удобно из скриптов и `tmux`.
 
 ```bash
-python -m shotcli status          # режим, PnL, направления
-python -m shotcli watch           # ордера онлайн
-python -m shotcli orders
-python -m shotcli deals
-python -m shotcli stats
-python -m shotcli plan
-python -m shotcli core            # средние рекомендации + таблица
-python -m shotcli logs
-python -m shotcli panic
-python -m shotcli resume
-python -m shotcli algo            # текущие пороги разведки
+python3 -m shotcli status          # режим, PnL, направления
+python3 -m shotcli watch           # ордера онлайн
+python3 -m shotcli orders
+python3 -m shotcli deals
+python3 -m shotcli stats
+python3 -m shotcli plan
+python3 -m shotcli core            # средние рекомендации + таблица
+python3 -m shotcli logs
+python3 -m shotcli panic
+python3 -m shotcli resume
+python3 -m shotcli algo            # текущие пороги разведки
 ```
 
 ### Настройки терминала
 
 ```bash
-python -m shotcli set long on
-python -m shotcli set long off
-python -m shotcli set short on
-python -m shotcli set short off
-python -m shotcli set size20 15
-python -m shotcli set size50 10
-python -m shotcli set autostop 8
+python3 -m shotcli set long on
+python3 -m shotcli set long off
+python3 -m shotcli set short on
+python3 -m shotcli set short off
+python3 -m shotcli set size20 15
+python3 -m shotcli set size50 10
+python3 -m shotcli set autostop 8
 ```
 
 `off` на long или short сразу перестаёт ставить ордера в эту сторону (как галочка на веб-странице).
@@ -103,12 +111,12 @@ python -m shotcli set autostop 8
 Горячо, без рестарта ядра. Пишется в `data/algo_runtime.json` и переживает перезапуск.
 
 ```bash
-python -m shotcli algo-set min_win_pct=75
-python -m shotcli algo-set hold_ms=300 tp_min_pct=0.3
-python -m shotcli algo-set suggest_inside_pct=0.05 suggest_inside_max_pct=0.10
-python -m shotcli algo-set min_percent=0.80 min_fills=3
-python -m shotcli algo-set windows_ms=500,700,1200
-python -m shotcli algo-set distance_levels=1.11,1.32,1.42,1.63,1.78
+python3 -m shotcli algo-set min_win_pct=75
+python3 -m shotcli algo-set hold_ms=300 tp_min_pct=0.3
+python3 -m shotcli algo-set suggest_inside_pct=0.05 suggest_inside_max_pct=0.10
+python3 -m shotcli algo-set min_percent=0.80 min_fills=3
+python3 -m shotcli algo-set windows_ms=500,700,1200
+python3 -m shotcli algo-set distance_levels=1.11,1.32,1.42,1.63,1.78
 ```
 
 | Ключ | Смысл |
@@ -135,11 +143,18 @@ python -m shotcli algo-set distance_levels=1.11,1.32,1.42,1.63,1.78
 | `SHOTTRADER_URL` / `--trader` | адрес терминала |
 | `SHOTCORE_TOKEN` / `--core-token` | если на ShotCore включён `WEB_TOKEN` или AUTH |
 | `TRADER_TOKEN` / `--trader-token` | если страница ShotTrader закрыта токеном |
+| `AUTH_USERS` / `--user` `--password` | если `AUTH_MODE=local` — CLI сам логинится |
+
+CLI сам читает `.env` и `shottrader/.env` из корня репозитория. `/health` всегда открыт, API — нет: без логина будет `401`.
+
+```bash
+python3 -m shotcli --user admin --password 'ваш_пароль'
+```
 
 Пример с другой машины в LAN:
 
 ```bash
-python -m shotcli --core http://192.168.1.10:4861 --trader http://192.168.1.10:4863
+python3 -m shotcli --core http://192.168.1.10:4861 --trader http://192.168.1.10:4863
 ```
 
 ---

@@ -65,7 +65,7 @@ OKX_PASSPHRASE=...
 | Panic | снять все ордера и клоны |
 | Снять авто-стоп | снова читать план |
 
-Без браузера те же действия: `python -m shotcli` (см. [../shotcli/README.md](../shotcli/README.md)).
+Без браузера те же действия: `python3 -m shotcli` (см. [../shotcli/README.md](../shotcli/README.md)).
 
 ## Файлы
 

@@ -74,9 +74,12 @@ class ShotTrader:
         auth_cfg = load_auth_config(brand="ShotTrader", token_fallback=self.cfg.web_token)
         # UI lock ≠ токен для ShotCore. WEB_TOKEN/SHOTCORE_TOKEN не закрывают страницу.
         ui_token = auth_cfg.resolve_ui_token(self.cfg.web_token)
-        app = web.Application(middlewares=make_middlewares(auth_cfg, api_token=ui_token))
+        # При AUTH_MODE=local/ldap CLI ходит с SESSION_SECRET / WEB_TOKEN, как браузерный API.
+        machine = auth_cfg.resolve_api_token(self.cfg.web_token or self.cfg.shotcore_token) if auth_cfg.enabled else ""
+        api_token = ui_token or machine
+        app = web.Application(middlewares=make_middlewares(auth_cfg, api_token=api_token))
         app["core"] = self
-        attach_auth(app, auth_cfg, api_token=ui_token)
+        attach_auth(app, auth_cfg, api_token=api_token)
         app.router.add_get("/", self._index)
         app.router.add_get("/health", self._health)
         app.router.add_get("/favicon.ico", self._favicon_ico)

@@ -143,7 +143,7 @@ python -m shottrader
 **Окно 3 — терминальный клиент** (Ubuntu Server, без браузера; не обязательно)
 
 ```bash
-python -m shotcli
+python3 -m shotcli
 ```
 
 Документация команд: [shotcli/README.md](shotcli/README.md).
@@ -324,7 +324,7 @@ docker compose up -d --force-recreate shottrader
 ### CLI на сервере (без браузера)
 
 ```bash
-python -m shotcli
+python3 -m shotcli
 ```
 
 Меню: ордера онлайн, сделки, статистика, план, галочки long/short, правка алгоритма. Полная шпаргалка команд — [shotcli/README.md](shotcli/README.md).
@@ -394,6 +394,13 @@ python -m shottrader
 
 **Страница не открывается с другого компьютера**  
 В `.env`: `WEB_HOST=0.0.0.0`. Откройте порты 4861 и 4863.
+
+**CLI пишет 401 unauthorized**  
+Страницы закрыты логином. `/health` при этом отвечает `ok`. Запускайте из корня репозитория (`python3 -m shotcli`) — клиент читает `.env` и `AUTH_USERS`. Либо явно:
+
+```bash
+python3 -m shotcli --user admin --password 'ваш_пароль'
+```
 
 **ShotTrader пустой, нет клонов**  
 Смотрите логи терминала. Частые причины:
