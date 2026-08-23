@@ -15,7 +15,7 @@ from .config import TraderConfig
 from .okx_broker import OkxBroker
 
 log = logging.getLogger("shottrader.engine")
-MIN_TP_PCT = 0.3
+MIN_TP_PCT = 0.5
 KEEP_DAYS = 8  # сегодня + 7 предыдущих
 
 
@@ -123,12 +123,6 @@ def _sides_from_pair(pair: dict[str, Any]) -> Sides:
         tp = round(float(pair.get("tp_pct") or 0), 2)
         buy_d = sell_d = d
         buy_tp = sell_tp = tp
-    if buy_d > 0 and buy_tp + 1e-9 < MIN_TP_PCT:
-        buy_d = 0.0
-        buy_tp = 0.0
-    if sell_d > 0 and sell_tp + 1e-9 < MIN_TP_PCT:
-        sell_d = 0.0
-        sell_tp = 0.0
     buy_v2 = round(float(pair.get("buy_v2_pct") or 0), 2)
     sell_v2 = round(float(pair.get("sell_v2_pct") or 0), 2)
     buy_v2_tp = round(float(pair.get("buy_v2_tp_pct") or buy_tp or 0), 2)
@@ -203,6 +197,7 @@ class ShotEngine:
         self.min_order_distance = cfg.min_order_distance
         self.min_v2_gap = cfg.min_v2_gap
         self.v1_offset = cfg.v1_offset
+        self.tp_offset = cfg.tp_offset
         self.v1_fail_bump = cfg.v1_fail_bump
         self.v1_fail_bumps: dict[str, float] = {}
         self.pair_lose_limit = cfg.pair_lose_limit
@@ -258,6 +253,8 @@ class ShotEngine:
             self.min_v2_gap = max(0.05, float(raw["min_v2_gap"]))
         if raw.get("v1_offset") not in (None, ""):
             self.v1_offset = max(-2.0, min(5.0, float(raw["v1_offset"])))
+        if raw.get("tp_offset") not in (None, ""):
+            self.tp_offset = max(0.0, min(2.0, float(raw["tp_offset"])))
         if raw.get("v1_fail_bump") not in (None, ""):
             self.v1_fail_bump = max(0.0, min(2.0, float(raw["v1_fail_bump"])))
         if raw.get("pair_lose_limit") not in (None, ""):
@@ -279,6 +276,7 @@ class ShotEngine:
             "min_order_distance": self.min_order_distance,
             "min_v2_gap": self.min_v2_gap,
             "v1_offset": self.v1_offset,
+            "tp_offset": self.tp_offset,
             "v1_fail_bump": self.v1_fail_bump,
             "pair_lose_limit": self.pair_lose_limit,
             "pair_lose_window_hours": self.pair_lose_window_hours,
@@ -477,6 +475,18 @@ class ShotEngine:
             sides.buy_v2 = sides.buy_v2_tp = 0.0
         if not keep(sides.sell_v2):
             sides.sell_v2 = sides.sell_v2_tp = 0.0
+
+        tp_off = round(float(self.tp_offset or 0), 2)
+
+        def apply_tp(tp: float, active: bool) -> float:
+            if not active:
+                return 0.0
+            return round(max(float(tp or 0) + tp_off, MIN_TP_PCT), 2)
+
+        sides.buy_tp = apply_tp(sides.buy_tp, sides.buy_d > 0)
+        sides.sell_tp = apply_tp(sides.sell_tp, sides.sell_d > 0)
+        sides.buy_v2_tp = apply_tp(sides.buy_v2_tp, sides.buy_v2 > 0)
+        sides.sell_v2_tp = apply_tp(sides.sell_v2_tp, sides.sell_v2 > 0)
         return sides
 
     def note(self, text: str) -> None:
@@ -1262,6 +1272,8 @@ class ShotEngine:
             "min_order_distance": self.min_order_distance,
             "min_v2_gap": self.min_v2_gap,
             "v1_offset": self.v1_offset,
+            "tp_offset": self.tp_offset,
+            "min_tp_pct": MIN_TP_PCT,
             "v1_fail_bump": self.v1_fail_bump,
             "v1_fail_bumps": [
                 {"symbol": sym, "extra": extra}

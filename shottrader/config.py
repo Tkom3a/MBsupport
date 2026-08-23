@@ -32,6 +32,7 @@ class TraderConfig:
     min_order_distance: float = 0.85
     min_v2_gap: float = 0.3
     v1_offset: float = 0.0
+    tp_offset: float = 0.0
     v1_fail_bump: float = 0.15
     pair_lose_limit: int = 2
     pair_lose_window_hours: float = 3.0
@@ -108,6 +109,7 @@ def load_trader_config(root: Path | None = None) -> TraderConfig:
         min_order_distance=max(0.0, _f("MIN_ORDER_DISTANCE", 0.85)),
         min_v2_gap=max(0.05, _f("MIN_V2_GAP", 0.3)),
         v1_offset=max(-2.0, min(5.0, _f("V1_OFFSET", 0.0))),
+        tp_offset=max(0.0, min(2.0, _f("TP_OFFSET", 0.0))),
         v1_fail_bump=max(0.0, min(2.0, _f("V1_FAIL_BUMP", 0.15))),
         pair_lose_limit=max(1, _i("PAIR_LOSE_LIMIT", 2)),
         pair_lose_window_hours=max(0.1, _f("PAIR_LOSE_WINDOW_HOURS", 3.0)),

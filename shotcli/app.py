@@ -220,6 +220,7 @@ def _status_lines(cli: ShotClient, state: dict[str, Any], ping: dict[str, str]) 
         f"autostop={state.get('autostop_usd')}$  "
         f"minD={state.get('min_order_distance', 0.85)}%  v2gap={state.get('min_v2_gap', 0.3)}%  "
         f"v1off={float(state.get('v1_offset') or 0):+g}%  "
+        f"tpoff=+{state.get('tp_offset', 0)}%  "
         f"v1fail=+{state.get('v1_fail_bump', 0.15)}%  "
         f"подтверждений={state.get('min_fills', 2)}"
         ),
@@ -398,6 +399,9 @@ def apply_set(cli: ShotClient, key: str, value: str) -> None:
         "v1off": "v1_offset",
         "v1_offset": "v1_offset",
         "offset": "v1_offset",
+        "tpoff": "tp_offset",
+        "tp_offset": "tp_offset",
+        "tp": "tp_offset",
         "v1fail": "v1_fail_bump",
         "v1_fail": "v1_fail_bump",
         "failbump": "v1_fail_bump",
@@ -417,7 +421,7 @@ def apply_set(cli: ShotClient, key: str, value: str) -> None:
     if not field:
         raise RuntimeError(
             f"неизвестный ключ {key}. доступны: long, short, size20, size50, autostop, "
-            "mindist, v2gap, v1off, v1fail, banloses, banwindow, banhours, minfills, core"
+            "mindist, v2gap, v1off, tpoff, v1fail, banloses, banwindow, banhours, minfills, core"
         )
     if field == "shotcore_url":
         res = cli.trader_post("/api/shotcore", {"url": value})
@@ -436,6 +440,7 @@ def apply_set(cli: ShotClient, key: str, value: str) -> None:
         f"autostop={res.get('autostop_usd')}  "
         f"minD={res.get('min_order_distance')}  v2gap={res.get('min_v2_gap')}  "
         f"v1off={res.get('v1_offset')}%  "
+        f"tpoff=+{res.get('tp_offset')}%  "
         f"бан={res.get('pair_lose_limit')} подряд → {res.get('pair_ban_hours')}ч  "
         f"v1fail=+{res.get('v1_fail_bump')}%  "
         f"подтверждений={res.get('min_fills')}"
