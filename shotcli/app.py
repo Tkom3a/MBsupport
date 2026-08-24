@@ -246,9 +246,15 @@ def _status_lines(cli: ShotClient, state: dict[str, Any], ping: dict[str, str]) 
             + "  ".join(f"{str(b.get('symbol') or '').split('-')[0]} {b.get('left_min')}м" for b in bans)
         )
     else:
-        lose_n = state.get("pair_lose_limit", 2)
+        lose_n = state.get("pair_lose_limit", 3)
         ban_h = state.get("pair_ban_hours", 3)
-        lines.append(f"бан  нет  ({lose_n} минуса подряд → {ban_h}ч)")
+        lines.append(f"бан  нет  ({lose_n} минуса подряд → {ban_h}ч, потом новая D)")
+    locks = state.get("d_locks") or []
+    if locks:
+        lines.append(
+            "ждём D  "
+            + "  ".join(str(b.get("symbol") or "").split("-")[0] for b in locks)
+        )
     if state.get("plan_error"):
         lines.append(f"план: {state['plan_error']}")
     return lines

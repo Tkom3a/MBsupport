@@ -212,7 +212,7 @@
         <div class="kpi"><div class="l">Сегодня · сделки / PnL</div><div class="v" id="day">0 / 0$</div></div>
         <h2 style="margin-top:14px">Бан пар</h2>
         <label>Минусов подряд до бана</label>
-        <input id="banLoseLimit" type="number" step="1" min="1" value="2" />
+        <input id="banLoseLimit" type="number" step="1" min="1" value="3" />
         <div class="row2">
           <div>
             <label>Окно учёта, ч</label>
@@ -223,8 +223,9 @@
             <input id="banHours" type="number" step="0.1" min="0.1" value="3" />
           </div>
         </div>
-        <div class="muted" id="banRule" style="margin:8px 0 6px">2 минуса за 3ч → бан 3ч</div>
+        <div class="muted" id="banRule" style="margin:8px 0 6px">3 минуса подряд → бан · ордера после новой D</div>
         <div id="banList" class="muted">нет</div>
+        <div id="dLockList" class="muted" style="margin-top:6px"></div>
         <button type="button" class="log-toggle" id="logToggle" aria-expanded="false">
           <span>Логи</span><span class="arrow">▸</span>
         </button>
@@ -587,7 +588,18 @@
       const loseN = Number(state.pair_lose_limit || 2);
       const banH = Number(state.pair_ban_hours || 3);
       document.getElementById("banRule").textContent =
-        `${loseN} минуса подряд → бан ${banH}ч · плюс между ними сбрасывает`;
+        `${loseN} минуса подряд → бан ${banH}ч · после бана только с новой D`;
+      const dLocks = state.d_locks || [];
+      document.getElementById("dLockList").innerHTML = dLocks.length
+        ? dLocks.map((b) => {
+            const name = String(b.symbol || "").replace("-USDT-SWAP", "");
+            const buy = Number(b.buy || 0);
+            const sell = Number(b.sell || 0);
+            const ds = [buy > 0 ? `BUY ${buy.toFixed(2)}` : "", sell > 0 ? `SHORT ${sell.toFixed(2)}` : ""]
+              .filter(Boolean).join(" / ");
+            return `<div class="amber" style="margin-bottom:3px">${name} ждём новую D${ds ? " · лок " + ds : ""}</div>`;
+          }).join("")
+        : "";
       const failBump = Number(state.v1_fail_bump || 0);
       document.getElementById("v1FailHint").textContent =
         `V1 минус и V2 плюс → первая дистанция пары +${failBump.toFixed(2)}%`;

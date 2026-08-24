@@ -16,6 +16,7 @@ from .okx_broker import OkxBroker
 
 log = logging.getLogger("shottrader.engine")
 MIN_TP_PCT = 0.5
+DEPTH_RECOVERY_INSIDE = 0.05  # D_new = D + |ход%| − 0.05
 KEEP_DAYS = 8  # сегодня + 7 предыдущих
 
 
@@ -170,6 +171,7 @@ class Algo:
     last_v1_ts: int = 0
     last_v2_ts: int = 0
     v1_rescue_key: str = ""
+    depth_bump_key: str = ""
 
 
 class ShotEngine:
@@ -206,6 +208,8 @@ class ShotEngine:
         self.min_fills = cfg.min_fills
         self.bans: dict[str, int] = {}
         self.ban_until_hist: dict[str, int] = {}
+        self.ban_d_lock: dict[str, dict[str, float]] = {}
+        self._d_lock_noted: set[str] = set()
         self.bans_path = self.data_dir / "pair_bans.json"
         self.halted = False
         self.halt_reason = ""
@@ -258,7 +262,9 @@ class ShotEngine:
         if raw.get("v1_fail_bump") not in (None, ""):
             self.v1_fail_bump = max(0.0, min(2.0, float(raw["v1_fail_bump"])))
         if raw.get("pair_lose_limit") not in (None, ""):
-            self.pair_lose_limit = max(1, int(float(raw["pair_lose_limit"])))
+            val = max(1, int(float(raw["pair_lose_limit"])))
+            # старый дефолт был 2; правило сменилось на 3 минуса подряд
+            self.pair_lose_limit = 3 if val == 2 else val
         if raw.get("pair_lose_window_hours") not in (None, ""):
             self.pair_lose_window_hours = max(0.1, float(raw["pair_lose_window_hours"]))
         if raw.get("pair_ban_hours") not in (None, ""):
@@ -307,9 +313,21 @@ class ShotEngine:
             extra = round(float(val or 0), 2)
             if extra > 0:
                 self.v1_fail_bumps[str(key).upper()] = extra
+        for key, val in (raw.get("ban_d_lock") or {}).items():
+            if not isinstance(val, dict):
+                continue
+            self.ban_d_lock[str(key).upper()] = {
+                "buy": round(float(val.get("buy") or 0), 2),
+                "sell": round(float(val.get("sell") or 0), 2),
+            }
 
     def _save_bans(self) -> None:
-        payload = {"bans": self.bans, "hist": self.ban_until_hist, "v1_fail_bumps": self.v1_fail_bumps}
+        payload = {
+            "bans": self.bans,
+            "hist": self.ban_until_hist,
+            "v1_fail_bumps": self.v1_fail_bumps,
+            "ban_d_lock": self.ban_d_lock,
+        }
         tmp = self.bans_path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(self.bans_path)
@@ -338,25 +356,79 @@ class ShotEngine:
             rows.append({"symbol": symbol, "until_ts": until, "left_min": left})
         return rows
 
-    def _loss_streak(self, symbol: str) -> int:
-        """Сколько минусов подряд с конца журнала пары (после прошлого бана)."""
+    def _pair_trades_since_ban(self, symbol: str) -> list[dict[str, Any]]:
         last_ban_end = int(self.ban_until_hist.get(symbol, 0) or 0)
-        rows: list[tuple[int, float]] = []
+        rows: list[dict[str, Any]] = []
         for row in getattr(self, "_journal_all", list(self.journal)):
             if str(row.get("symbol") or "").upper() != symbol:
                 continue
-            ts = int(row.get("ts") or 0)
-            if last_ban_end and ts < last_ban_end:
+            if last_ban_end and int(row.get("ts") or 0) < last_ban_end:
                 continue
-            rows.append((ts, float(row.get("pnl_usd") or 0)))
-        rows.sort(key=lambda item: item[0])
+            rows.append(row)
+        rows.sort(key=lambda item: int(item.get("ts") or 0))
+        return rows
+
+    def _loss_streak(self, symbol: str) -> int:
+        """Сколько минусов подряд с конца журнала пары (после прошлого бана)."""
         streak = 0
-        for _ts, pnl in reversed(rows):
-            if pnl <= 0:
+        for row in reversed(self._pair_trades_since_ban(symbol)):
+            if float(row.get("pnl_usd") or 0) <= 0:
                 streak += 1
             else:
                 break
         return streak
+
+    def _plan_raw_d(self, symbol: str) -> tuple[float, float]:
+        for pair in self.plan_pairs:
+            if str(pair.get("symbol") or "").upper() == symbol:
+                return (
+                    round(float(pair.get("buy_pct") or 0), 2),
+                    round(float(pair.get("sell_pct") or 0), 2),
+                )
+        return 0.0, 0.0
+
+    def _d_lock_blocks(self, symbol: str, pair: dict[str, Any]) -> bool:
+        lock = self.ban_d_lock.get(symbol)
+        if not lock:
+            return False
+        buy = round(float(pair.get("buy_pct") or 0), 2)
+        sell = round(float(pair.get("sell_pct") or 0), 2)
+        lb = round(float(lock.get("buy") or 0), 2)
+        ls = round(float(lock.get("sell") or 0), 2)
+
+        def same(now: float, old: float) -> bool:
+            if old <= 0 and now <= 0:
+                return True
+            if old <= 0 or now <= 0:
+                return False
+            return abs(now - old) < 0.02
+
+        if same(buy, lb) and same(sell, ls):
+            if symbol not in self._d_lock_noted and not self.is_banned(symbol):
+                self._d_lock_noted.add(symbol)
+                self.note(
+                    f"{symbol} бан истёк, D та же BUY {buy:g}/SHORT {sell:g} — жду новую дистанцию"
+                )
+            return True
+        self.ban_d_lock.pop(symbol, None)
+        self._d_lock_noted.discard(symbol)
+        self._save_bans()
+        self.note(f"{symbol} новая D BUY {buy:g}/SHORT {sell:g} — лок бана снят, можно ставить")
+        return False
+
+    def public_d_locks(self) -> list[dict[str, Any]]:
+        rows = []
+        for symbol, lock in sorted(self.ban_d_lock.items()):
+            if self.is_banned(symbol):
+                continue
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "buy": lock.get("buy") or 0,
+                    "sell": lock.get("sell") or 0,
+                }
+            )
+        return rows
 
     def _maybe_pair_ban(self, symbol: str) -> bool:
         symbol = str(symbol or "").upper()
@@ -365,16 +437,67 @@ class ShotEngine:
         if self._loss_streak(symbol) < self.pair_lose_limit:
             return False
         until = _now_ms() + int(self.pair_ban_hours * 3600 * 1000)
+        buy, sell = self._plan_raw_d(symbol)
+        algo = self.algos.get(symbol)
+        if buy <= 0 and sell <= 0 and algo:
+            buy = round(float(algo.buy_distance or 0), 2)
+            sell = round(float(algo.sell_distance or 0), 2)
         self.bans[symbol] = until
         self.ban_until_hist[symbol] = until
+        self.ban_d_lock[symbol] = {"buy": buy, "sell": sell}
+        self._d_lock_noted.discard(symbol)
         self.v1_fail_bumps.pop(symbol, None)
         self._save_bans()
         self.note(
             f"БАН {symbol}: {self.pair_lose_limit} минуса подряд "
-            f"— не следим {self.pair_ban_hours:g}ч"
+            f"— не следим {self.pair_ban_hours:g}ч, ордера только после новой D"
         )
         self._kill(symbol, "pair-ban")
         return True
+
+    def _raise_v1_by(self, algo: Algo, add: float, why: str) -> None:
+        add = round(float(add or 0), 2)
+        if add <= 0 or self.is_banned(algo.symbol):
+            return
+        symbol = algo.symbol
+        self.v1_fail_bumps[symbol] = round(self.v1_fail_bumps.get(symbol, 0) + add, 2)
+        self._save_bans()
+        if algo.buy_distance > 0:
+            algo.buy_distance = round(algo.buy_distance + add, 2)
+        if algo.sell_distance > 0:
+            algo.sell_distance = round(algo.sell_distance + add, 2)
+        algo.distance = algo.buy_distance if algo.buy_distance > 0 else algo.sell_distance
+        gap = max(0.05, round(float(self.min_v2_gap or 0.3), 2))
+        if algo.buy_distance > 0:
+            want = round(algo.buy_distance + gap, 2)
+            if algo.buy_v2_distance <= 0 or algo.buy_v2_distance + 1e-9 < want:
+                algo.buy_v2_distance = want
+                if algo.v2_state == "off":
+                    algo.v2_state = "hunt"
+                if algo.v2_state == "hunt":
+                    algo.buy_v2_px = 0.0
+                    algo.buy_v2_id = ""
+        if algo.sell_distance > 0:
+            want = round(algo.sell_distance + gap, 2)
+            if algo.sell_v2_distance <= 0 or algo.sell_v2_distance + 1e-9 < want:
+                algo.sell_v2_distance = want
+                if algo.v2_state == "off":
+                    algo.v2_state = "hunt"
+                if algo.v2_state == "hunt":
+                    algo.sell_v2_px = 0.0
+                    algo.sell_v2_id = ""
+        if algo.state == "hunt":
+            algo.buy_px = 0.0
+            algo.sell_px = 0.0
+            algo.buy_id = algo.sell_id = ""
+        algo.fingerprint = (
+            f"{algo.buy_distance}|{algo.buy_tp}|{algo.sell_distance}|{algo.sell_tp}|"
+            f"{algo.buy_v2_distance}|{algo.sell_v2_distance}"
+        )
+        self.note(
+            f"{symbol} {why} — V1 +{add:g}% "
+            f"(накоплено +{self.v1_fail_bumps[symbol]:g}%), V2 = V1+{gap:g}%"
+        )
 
     def _maybe_v1_fail_bump(self, algo: Algo) -> None:
         """V1 минус + V2 плюс → поднять первую D этой пары."""
@@ -389,40 +512,40 @@ class ShotEngine:
         if algo.v1_rescue_key == key:
             return
         algo.v1_rescue_key = key
+        self._raise_v1_by(algo, bump, "V1 минус / V2 плюс")
+
+    def _maybe_double_loss_depth(self, algo: Algo) -> None:
+        """Два минуса подряд (как V1+V2) → D_new = D + |ход%| − 0.05, V2 с зазором."""
         symbol = algo.symbol
-        self.v1_fail_bumps[symbol] = round(self.v1_fail_bumps.get(symbol, 0) + bump, 2)
-        self._save_bans()
-        if algo.buy_distance > 0:
-            algo.buy_distance = round(algo.buy_distance + bump, 2)
-        if algo.sell_distance > 0:
-            algo.sell_distance = round(algo.sell_distance + bump, 2)
-        algo.distance = algo.buy_distance if algo.buy_distance > 0 else algo.sell_distance
-        gap = max(0.05, round(float(self.min_v2_gap or 0.3), 2))
-        if algo.buy_distance > 0 and algo.buy_v2_distance > 0:
-            want = round(algo.buy_distance + gap, 2)
-            if algo.buy_v2_distance + 1e-9 < want:
-                algo.buy_v2_distance = want
-                if algo.v2_state == "hunt":
-                    algo.buy_v2_px = 0.0
-                    algo.buy_v2_id = ""
-        if algo.sell_distance > 0 and algo.sell_v2_distance > 0:
-            want = round(algo.sell_distance + gap, 2)
-            if algo.sell_v2_distance + 1e-9 < want:
-                algo.sell_v2_distance = want
-                if algo.v2_state == "hunt":
-                    algo.sell_v2_px = 0.0
-                    algo.sell_v2_id = ""
-        if algo.state == "hunt":
-            algo.buy_px = 0.0
-            algo.sell_px = 0.0
-            algo.buy_id = algo.sell_id = ""
-        algo.fingerprint = (
-            f"{algo.buy_distance}|{algo.buy_tp}|{algo.sell_distance}|{algo.sell_tp}|"
-            f"{algo.buy_v2_distance}|{algo.sell_v2_distance}"
+        streak = self._loss_streak(symbol)
+        if streak < 2 or streak >= self.pair_lose_limit:
+            return
+        last_two: list[dict[str, Any]] = []
+        for row in reversed(self._pair_trades_since_ban(symbol)):
+            if float(row.get("pnl_usd") or 0) > 0:
+                break
+            last_two.append(row)
+            if len(last_two) >= 2:
+                break
+        if len(last_two) < 2:
+            return
+        key = f"{int(last_two[0].get('ts') or 0)}:{int(last_two[1].get('ts') or 0)}"
+        if algo.depth_bump_key == key:
+            return
+        v1_row = next(
+            (row for row in last_two if str(row.get("layer") or "v1").lower() != "v2"),
+            last_two[0],
         )
-        self.note(
-            f"{symbol} V1 минус / V2 плюс — поднимаю V1 на {bump:g}% "
-            f"(накоплено +{self.v1_fail_bumps[symbol]:g}%)"
+        move = abs(float(v1_row.get("pnl_pct") or 0))
+        add = round(move - DEPTH_RECOVERY_INSIDE, 2)
+        if add <= 0:
+            return
+        algo.depth_bump_key = key
+        old_d = float(v1_row.get("distance") or algo.distance or 0)
+        self._raise_v1_by(
+            algo,
+            add,
+            f"два минуса: D {old_d:g}+|{move:g}|−{DEPTH_RECOVERY_INSIDE:g}",
         )
 
     def _filter_sides(self, sides: Sides) -> Sides:
@@ -663,6 +786,8 @@ class ShotEngine:
         for pair in pairs:
             symbol = str(pair.get("symbol") or "").upper()
             if not symbol or self.is_banned(symbol):
+                continue
+            if self._d_lock_blocks(symbol, pair):
                 continue
             sides = self._plan_sides(pair)
             if not sides.any():
@@ -1002,6 +1127,7 @@ class ShotEngine:
             algo.last_v2_ts = int(row["ts"])
         self._maybe_v1_fail_bump(algo)
         if pnl <= 0:
+            self._maybe_double_loss_depth(algo)
             self._maybe_pair_ban(algo.symbol)
         if pnl <= -self.autostop_usd:
             self.emergency(f"сделка {algo.symbol} {pnl:.2f}$ ≤ -{self.autostop_usd:g}$")
@@ -1285,6 +1411,7 @@ class ShotEngine:
             "pair_ban_hours": self.pair_ban_hours,
             "min_fills": self.min_fills,
             "bans": self.public_bans(),
+            "d_locks": self.public_d_locks(),
             "follow_delay_ms": self.cfg.follow_delay_ms,
             "hold_ms": self.cfg.hold_ms,
             "run_hours": self.cfg.run_hours,
