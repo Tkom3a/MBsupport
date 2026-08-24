@@ -221,7 +221,10 @@ def _status_lines(cli: ShotClient, state: dict[str, Any], ping: dict[str, str]) 
         f"minD={state.get('min_order_distance', 0.85)}%  v2gap={state.get('min_v2_gap', 0.3)}%  "
         f"v1off={float(state.get('v1_offset') or 0):+g}%  "
         f"tpoff=+{state.get('tp_offset', 0)}%  "
-        f"SL={state.get('stop_loss_pct', 0.22)}%  "
+        f"SL L={state.get('stop_loss_long_pct', 0.22)}% "
+        f"S={state.get('stop_loss_short_pct', 0.22)}% "
+        f"V2L={state.get('stop_loss_v2_long_pct', 0.22)}% "
+        f"V2S={state.get('stop_loss_v2_short_pct', 0.22)}%  "
         f"v1fail=+{state.get('v1_fail_bump', 0.15)}%  "
         f"подтверждений={state.get('min_fills', 2)}"
         ),
@@ -413,6 +416,14 @@ def apply_set(cli: ShotClient, key: str, value: str) -> None:
         "stoploss": "stop_loss_pct",
         "stop_loss": "stop_loss_pct",
         "stop_loss_pct": "stop_loss_pct",
+        "sllong": "stop_loss_long_pct",
+        "sl_long": "stop_loss_long_pct",
+        "slshort": "stop_loss_short_pct",
+        "sl_short": "stop_loss_short_pct",
+        "slv2long": "stop_loss_v2_long_pct",
+        "sl_v2_long": "stop_loss_v2_long_pct",
+        "slv2short": "stop_loss_v2_short_pct",
+        "sl_v2_short": "stop_loss_v2_short_pct",
         "v1fail": "v1_fail_bump",
         "v1_fail": "v1_fail_bump",
         "failbump": "v1_fail_bump",
@@ -432,7 +443,7 @@ def apply_set(cli: ShotClient, key: str, value: str) -> None:
     if not field:
         raise RuntimeError(
             f"неизвестный ключ {key}. доступны: long, short, size20, size50, autostop, "
-            "mindist, v2gap, v1off, tpoff, sl, v1fail, banloses, banwindow, banhours, minfills, core"
+            "mindist, v2gap, v1off, tpoff, sl, sllong, slshort, slv2long, slv2short, v1fail, banloses, banwindow, banhours, minfills, core"
         )
     if field == "shotcore_url":
         res = cli.trader_post("/api/shotcore", {"url": value})
@@ -441,6 +452,14 @@ def apply_set(cli: ShotClient, key: str, value: str) -> None:
     payload: dict[str, Any]
     if field in {"trade_long", "trade_short"}:
         payload = {field: _as_bool(value)}
+    elif field == "stop_loss_pct":
+        sl = float(value)
+        payload = {
+            "stop_loss_long_pct": sl,
+            "stop_loss_short_pct": sl,
+            "stop_loss_v2_long_pct": sl,
+            "stop_loss_v2_short_pct": sl,
+        }
     else:
         payload = {field: float(value)}
     res = cli.trader_post("/api/settings", payload)
@@ -452,7 +471,8 @@ def apply_set(cli: ShotClient, key: str, value: str) -> None:
         f"minD={res.get('min_order_distance')}  v2gap={res.get('min_v2_gap')}  "
         f"v1off={res.get('v1_offset')}%  "
         f"tpoff=+{res.get('tp_offset')}%  "
-        f"SL={res.get('stop_loss_pct')}%  "
+        f"SL L={res.get('stop_loss_long_pct')}% S={res.get('stop_loss_short_pct')}% "
+        f"V2L={res.get('stop_loss_v2_long_pct')}% V2S={res.get('stop_loss_v2_short_pct')}%  "
         f"бан={res.get('pair_lose_limit')} подряд → {res.get('pair_ban_hours')}ч  "
         f"v1fail=+{res.get('v1_fail_bump')}%  "
         f"подтверждений={res.get('min_fills')}"
