@@ -186,6 +186,9 @@ class ShotTrader:
             if "tp_offset" in body and body["tp_offset"] not in (None, ""):
                 self.engine.tp_offset = max(0.0, min(2.0, float(body["tp_offset"])))
                 self.cfg.tp_offset = self.engine.tp_offset
+            if "stop_loss_pct" in body and body["stop_loss_pct"] not in (None, ""):
+                self.engine.stop_loss_pct = max(0.0, min(5.0, float(body["stop_loss_pct"])))
+                self.cfg.stop_loss_pct = self.engine.stop_loss_pct
             if "v1_fail_bump" in body and body["v1_fail_bump"] not in (None, ""):
                 self.engine.v1_fail_bump = max(0.0, min(2.0, float(body["v1_fail_bump"])))
                 self.cfg.v1_fail_bump = self.engine.v1_fail_bump
@@ -214,6 +217,7 @@ class ShotTrader:
             f"short={'on' if self.engine.trade_short else 'off'} "
             f"minD={self.engine.min_order_distance:g}% v2gap={self.engine.min_v2_gap:g}% "
             f"v1off={self.engine.v1_offset:+g}% tpoff=+{self.engine.tp_offset:g}% "
+            f"SL={self.engine.stop_loss_pct:g}% "
             f"v1fail=+{self.engine.v1_fail_bump:g}% "
             f"бан={self.engine.pair_lose_limit} подряд / "
             f"→ {self.engine.pair_ban_hours:g}ч  подтверждений={self.engine.min_fills}"
@@ -232,6 +236,7 @@ class ShotTrader:
                 "min_v2_gap": self.engine.min_v2_gap,
                 "v1_offset": self.engine.v1_offset,
                 "tp_offset": self.engine.tp_offset,
+                "stop_loss_pct": self.engine.stop_loss_pct,
                 "v1_fail_bump": self.engine.v1_fail_bump,
                 "pair_lose_limit": self.engine.pair_lose_limit,
                 "pair_lose_window_hours": self.engine.pair_lose_window_hours,

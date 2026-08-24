@@ -182,6 +182,13 @@
           рекомендация 0.40% → TP 0.50% · пол 0.5%
         </div>
         <button class="primary" id="saveTpBtn">Применить TP</button>
+        <h2 style="margin-top:14px">Стоп-лосс</h2>
+        <label>SL от входа, %</label>
+        <input id="stopLoss" type="number" step="0.01" min="0" max="5" value="0.22" />
+        <div class="muted" id="slHint" style="margin:6px 0 8px">
+          Сразу после входа. BUY −0.22% / SHORT +0.22% от цены входа. 0 — выкл.
+        </div>
+        <button class="primary" id="saveSlBtn">Применить SL</button>
         <h2 style="margin-top:14px">Подъём V1 после неудачи</h2>
         <label>На сколько поднять V1, %</label>
         <input id="v1FailBump" type="number" step="0.01" min="0" max="2" value="0.15" />
@@ -390,7 +397,7 @@
     }
 
     const settingsDirty = {
-      orderSize20: false, orderSize50: false, autostop: false, minDist: false, minV2Gap: false, v1Offset: false, tpOffset: false,
+      orderSize20: false, orderSize50: false, autostop: false, minDist: false, minV2Gap: false, v1Offset: false, tpOffset: false, stopLoss: false,
       banLoseLimit: false, banLoseWindow: false, banHours: false, minFills: false, v1FailBump: false,
     };
     let settingsLocked = false;
@@ -414,6 +421,7 @@
         min_v2_gap: Number(document.getElementById("minV2Gap").value),
         v1_offset: Number(document.getElementById("v1Offset").value),
         tp_offset: Number(document.getElementById("tpOffset").value),
+        stop_loss_pct: Number(document.getElementById("stopLoss").value),
         v1_fail_bump: Number(document.getElementById("v1FailBump").value),
         pair_lose_limit: Number(document.getElementById("banLoseLimit").value),
         pair_lose_window_hours: Number(document.getElementById("banLoseWindow").value),
@@ -433,6 +441,7 @@
       if (data.min_v2_gap != null) document.getElementById("minV2Gap").value = data.min_v2_gap;
       if (data.v1_offset != null) document.getElementById("v1Offset").value = data.v1_offset;
       if (data.tp_offset != null) document.getElementById("tpOffset").value = data.tp_offset;
+      if (data.stop_loss_pct != null) document.getElementById("stopLoss").value = data.stop_loss_pct;
       if (data.v1_fail_bump != null) document.getElementById("v1FailBump").value = data.v1_fail_bump;
       if (data.pair_lose_limit != null) document.getElementById("banLoseLimit").value = data.pair_lose_limit;
       if (data.pair_lose_window_hours != null) document.getElementById("banLoseWindow").value = data.pair_lose_window_hours;
@@ -447,6 +456,7 @@
       settingsDirty.minV2Gap = false;
       settingsDirty.v1Offset = false;
       settingsDirty.tpOffset = false;
+      settingsDirty.stopLoss = false;
       settingsDirty.v1FailBump = false;
       settingsDirty.banLoseLimit = false;
       settingsDirty.banLoseWindow = false;
@@ -460,6 +470,7 @@
         if (data.min_v2_gap != null) state.min_v2_gap = data.min_v2_gap;
         if (data.v1_offset != null) state.v1_offset = data.v1_offset;
         if (data.tp_offset != null) state.tp_offset = data.tp_offset;
+        if (data.stop_loss_pct != null) state.stop_loss_pct = data.stop_loss_pct;
         if (data.v1_fail_bump != null) state.v1_fail_bump = data.v1_fail_bump;
         if (data.pair_lose_limit != null) state.pair_lose_limit = data.pair_lose_limit;
         if (data.pair_lose_window_hours != null) state.pair_lose_window_hours = data.pair_lose_window_hours;
@@ -499,6 +510,10 @@
       }
       if (!Number.isFinite(payload.tp_offset) || payload.tp_offset < 0 || payload.tp_offset > 2) {
         alert("Зазор TP должен быть от 0% до 2%");
+        return;
+      }
+      if (!Number.isFinite(payload.stop_loss_pct) || payload.stop_loss_pct < 0 || payload.stop_loss_pct > 5) {
+        alert("Стоп-лосс должен быть от 0% до 5%");
         return;
       }
       if (!Number.isFinite(payload.v1_fail_bump) || payload.v1_fail_bump < 0 || payload.v1_fail_bump > 2) {
@@ -559,6 +574,7 @@
       syncInput("minV2Gap", state.min_v2_gap);
       syncInput("v1Offset", state.v1_offset);
       syncInput("tpOffset", state.tp_offset);
+      syncInput("stopLoss", state.stop_loss_pct);
       syncInput("v1FailBump", state.v1_fail_bump);
       syncInput("banLoseLimit", state.pair_lose_limit);
       syncInput("banLoseWindow", state.pair_lose_window_hours);
@@ -622,6 +638,10 @@
       const tpEx = Math.max(0.4 + tpOff, tpFloor);
       document.getElementById("tpOffsetHint").textContent =
         `рекомендация 0.40% + ${tpOff.toFixed(2)}% → TP ${tpEx.toFixed(2)}% · пол ${tpFloor.toFixed(2)}%`;
+      const sl = Number(state.stop_loss_pct || 0);
+      document.getElementById("slHint").textContent = sl > 0
+        ? `Сразу после входа. BUY −${sl.toFixed(2)}% / SHORT +${sl.toFixed(2)}% от цены входа. 0 — выкл.`
+        : "Стоп-лосс выключен (0).";
       const bans = state.bans || [];
       document.getElementById("banList").innerHTML = bans.length
         ? bans.map((b) => {
@@ -630,7 +650,8 @@
           }).join("")
         : `<span class="muted">нет</span>`;
       document.getElementById("boardMeta").textContent =
-        `follow ${(state.follow_delay_ms || 1000) / 1000} с · hold ${(state.hold_ms || 300) / 1000} с`;
+        `follow ${(state.follow_delay_ms || 1000) / 1000} с · hold ${(state.hold_ms || 300) / 1000} с`
+        + ` · SL ${Number(state.stop_loss_pct || 0).toFixed(2)}%`;
       document.getElementById("tickAge").textContent = new Date().toLocaleTimeString();
       document.getElementById("footMode").textContent = state.emulate
         ? "ордера виртуальные — ключи OKX не нужны"
@@ -829,6 +850,7 @@
       if (settingsDirty.minV2Gap) next.min_v2_gap = Number(document.getElementById("minV2Gap").value);
       if (settingsDirty.v1Offset) next.v1_offset = Number(document.getElementById("v1Offset").value);
       if (settingsDirty.tpOffset) next.tp_offset = Number(document.getElementById("tpOffset").value);
+      if (settingsDirty.stopLoss) next.stop_loss_pct = Number(document.getElementById("stopLoss").value);
       if (settingsDirty.v1FailBump) next.v1_fail_bump = Number(document.getElementById("v1FailBump").value);
       if (settingsDirty.banLoseLimit) next.pair_lose_limit = Number(document.getElementById("banLoseLimit").value);
       if (settingsDirty.banLoseWindow) next.pair_lose_window_hours = Number(document.getElementById("banLoseWindow").value);
@@ -838,7 +860,7 @@
       render();
     }
 
-    ["orderSize20", "orderSize50", "autostop", "minDist", "minV2Gap", "v1Offset", "tpOffset", "v1FailBump", "banLoseLimit", "banLoseWindow", "banHours", "minFills"].forEach((id) => {
+    ["orderSize20", "orderSize50", "autostop", "minDist", "minV2Gap", "v1Offset", "tpOffset", "stopLoss", "v1FailBump", "banLoseLimit", "banLoseWindow", "banHours", "minFills"].forEach((id) => {
       const el = document.getElementById(id);
       el.addEventListener("input", () => { settingsDirty[id] = true; });
       el.addEventListener("keydown", (ev) => {
@@ -852,6 +874,7 @@
     document.getElementById("saveFillsBtn").onclick = () => saveSettings();
     document.getElementById("saveOffsetBtn").onclick = () => saveSettings();
     document.getElementById("saveTpBtn").onclick = () => saveSettings();
+    document.getElementById("saveSlBtn").onclick = () => saveSettings();
     document.getElementById("saveFailBumpBtn").onclick = () => saveSettings();
     ["tradeLong", "tradeShort"].forEach((id) => {
       document.getElementById(id).addEventListener("change", () => saveSettings());

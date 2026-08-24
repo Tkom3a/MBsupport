@@ -200,6 +200,7 @@ class ShotEngine:
         self.min_v2_gap = cfg.min_v2_gap
         self.v1_offset = cfg.v1_offset
         self.tp_offset = cfg.tp_offset
+        self.stop_loss_pct = cfg.stop_loss_pct
         self.v1_fail_bump = cfg.v1_fail_bump
         self.v1_fail_bumps: dict[str, float] = {}
         self.pair_lose_limit = cfg.pair_lose_limit
@@ -259,6 +260,8 @@ class ShotEngine:
             self.v1_offset = max(-2.0, min(5.0, float(raw["v1_offset"])))
         if raw.get("tp_offset") not in (None, ""):
             self.tp_offset = max(0.0, min(2.0, float(raw["tp_offset"])))
+        if raw.get("stop_loss_pct") not in (None, ""):
+            self.stop_loss_pct = max(0.0, min(5.0, float(raw["stop_loss_pct"])))
         if raw.get("v1_fail_bump") not in (None, ""):
             self.v1_fail_bump = max(0.0, min(2.0, float(raw["v1_fail_bump"])))
         if raw.get("pair_lose_limit") not in (None, ""):
@@ -283,6 +286,7 @@ class ShotEngine:
             "min_v2_gap": self.min_v2_gap,
             "v1_offset": self.v1_offset,
             "tp_offset": self.tp_offset,
+            "stop_loss_pct": self.stop_loss_pct,
             "v1_fail_bump": self.v1_fail_bump,
             "pair_lose_limit": self.pair_lose_limit,
             "pair_lose_window_hours": self.pair_lose_window_hours,
@@ -1017,7 +1021,7 @@ class ShotEngine:
             algo.buy_v2_id = ""
             algo.sell_v2_id = ""
             d = algo.buy_v2_distance if side == "buy" else algo.sell_v2_distance
-            self.note(f"вход V2 {algo.symbol} {side.upper()} @ {px:.6g} D{d}% size={algo.size_usdt:g}$")
+            self.note(f"вход V2 {algo.symbol} {side.upper()} @ {px:.6g} D{d}% SL{self.stop_loss_pct:g}% size={algo.size_usdt:g}$")
             return
         algo.state = "pos"
         algo.pos_side = side
@@ -1037,7 +1041,7 @@ class ShotEngine:
         tp = algo.buy_tp if side == "buy" else algo.sell_tp
         algo.distance = d
         algo.tp = tp
-        self.note(f"вход {algo.symbol} {side.upper()} @ {px:.6g} D{d}% size={algo.size_usdt:g}$")
+        self.note(f"вход {algo.symbol} {side.upper()} @ {px:.6g} D{d}% SL{self.stop_loss_pct:g}% size={algo.size_usdt:g}$")
 
     def _maybe_exit(self, algo: Algo, ts: int, price: float) -> None:
         if algo.state == "pos" and algo.entry > 0:
@@ -1056,14 +1060,21 @@ class ShotEngine:
             return
         favor = (price - entry) / entry * 100.0 if side == "buy" else (entry - price) / entry * 100.0
         tp = max(tp, MIN_TP_PCT)
+        sl = max(0.0, round(float(self.stop_loss_pct or 0), 2))
         hit_tp = tp > 0 and favor + 1e-12 >= tp
+        hit_sl = sl > 0 and favor - 1e-12 <= -sl
         timed = ts - fill_ts >= self.cfg.hold_ms
-        if not hit_tp and not timed:
+        if not hit_tp and not hit_sl and not timed:
             return
-        exit_px = entry * (1 + tp / 100.0) if hit_tp and side == "buy" else (
-            entry * (1 - tp / 100.0) if hit_tp else price
-        )
-        tag = "TP" if hit_tp else "0.3с"
+        if hit_tp:
+            exit_px = entry * (1 + tp / 100.0) if side == "buy" else entry * (1 - tp / 100.0)
+            tag = "TP"
+        elif hit_sl:
+            exit_px = entry * (1 - sl / 100.0) if side == "buy" else entry * (1 + sl / 100.0)
+            tag = "SL"
+        else:
+            exit_px = price
+            tag = "0.3с"
         if layer == "v2":
             tag = f"V2 {tag}"
         self._close(algo, exit_px, tag, layer)
@@ -1399,6 +1410,7 @@ class ShotEngine:
             "min_v2_gap": self.min_v2_gap,
             "v1_offset": self.v1_offset,
             "tp_offset": self.tp_offset,
+            "stop_loss_pct": self.stop_loss_pct,
             "min_tp_pct": MIN_TP_PCT,
             "v1_fail_bump": self.v1_fail_bump,
             "v1_fail_bumps": [
