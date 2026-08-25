@@ -60,7 +60,10 @@ class ShotStore:
         suggest_inside_pct: float = 0.05,
         suggest_inside_max_pct: float = 0.10,
         min_win_pct: float = 70.0,
-        min_fills: int = 2,
+        min_fills: int = 5,
+        fee_maker_pct: float = 0.02,
+        fee_taker_pct: float = 0.05,
+        score_sl_pct: float = 0.22,
         mt_plan_name: str = "mt_plan.json",
         mt_run_hours: float = 3.0,
     ):
@@ -81,6 +84,9 @@ class ShotStore:
         self.suggest_inside_max_pct = max(float(suggest_inside_max_pct), self.suggest_inside_pct)
         self.min_win_pct = max(float(min_win_pct), 0.0)
         self.min_fills = max(int(min_fills), 1)
+        self.fee_maker_pct = max(0.0, float(fee_maker_pct))
+        self.fee_taker_pct = max(0.0, float(fee_taker_pct))
+        self.score_sl_pct = max(0.0, float(score_sl_pct))
         self.events: deque[dict[str, Any]] = deque(maxlen=50_000)
         self.total = 0
         self._stats_memo: tuple[Any, dict[str, Any]] | None = None
@@ -246,6 +252,9 @@ class ShotStore:
             direction,
             only_btc_calm,
             fills,
+            round(self.fee_maker_pct, 4),
+            round(self.fee_taker_pct, 4),
+            round(self.score_sl_pct, 4),
             len(items),
             int(items[-1]["peak_ts"]) if items else 0,
             self.total,
@@ -275,6 +284,9 @@ class ShotStore:
                 min_win_pct=self.min_win_pct,
                 min_fills=fills,
                 tp_min_pct=self.tp_min_pct,
+                fee_maker_pct=self.fee_maker_pct,
+                fee_taker_pct=self.fee_taker_pct,
+                sl_pct=self.score_sl_pct,
             )
             sell_d, sell_plus, sell_minus, sell_win, sell_tp, sell_hint = _recommend_and_score(
                 up_shots,
@@ -285,6 +297,9 @@ class ShotStore:
                 min_win_pct=self.min_win_pct,
                 min_fills=fills,
                 tp_min_pct=self.tp_min_pct,
+                fee_maker_pct=self.fee_maker_pct,
+                fee_taker_pct=self.fee_taker_pct,
+                sl_pct=self.score_sl_pct,
             )
             # Сводная колонка — лучшая из сторон, без смешивания UP+DOWN в одну D.
             if buy_d > 0 and (sell_d <= 0 or (buy_plus, buy_win) >= (sell_plus, sell_win)):
@@ -359,6 +374,9 @@ class ShotStore:
         payload = {
             "lookback_min": lookback_min,
             "min_fills": fills,
+            "fee_maker_pct": self.fee_maker_pct,
+            "fee_taker_pct": self.fee_taker_pct,
+            "score_sl_pct": self.score_sl_pct,
             "shots": len(items),
             "pairs": len(rows),
             "avg": round(statistics.fmean(all_pct), 4) if all_pct else 0.0,
@@ -495,6 +513,7 @@ class ShotStore:
                     "score_minus": int(row.get("score_minus") or 0),
                     "filter_hint": row.get("filter_hint") or "",
                     "win_prob": float(row.get("win_prob") or 0),
+                    "last_ts": int(row.get("last_ts") or 0),
                 }
             )
         return {
@@ -600,6 +619,9 @@ class ShotStore:
             "hold_ms": ("hold_ms", int, 50, 5000),
             "suggest_inside_pct": ("suggest_inside_pct", float, 0.0, 1.0),
             "suggest_inside_max_pct": ("suggest_inside_max_pct", float, 0.0, 2.0),
+            "fee_maker_pct": ("fee_maker_pct", float, 0.0, 0.5),
+            "fee_taker_pct": ("fee_taker_pct", float, 0.0, 0.5),
+            "score_sl_pct": ("score_sl_pct", float, 0.0, 5.0),
             "distance_levels": ("distance_levels", None, None, None),
         }
         changed: dict[str, Any] = {}
@@ -642,6 +664,9 @@ class ShotStore:
             "hold_ms": self.hold_ms,
             "suggest_inside_pct": self.suggest_inside_pct,
             "suggest_inside_max_pct": self.suggest_inside_max_pct,
+            "fee_maker_pct": self.fee_maker_pct,
+            "fee_taker_pct": self.fee_taker_pct,
+            "score_sl_pct": self.score_sl_pct,
             "distance_levels": list(self.distance_levels),
         }
 
@@ -716,12 +741,15 @@ def _recommend_and_score(
     levels: list[float] | None = None,
     inside_max: float | None = None,
     min_win_pct: float = 70.0,
-    min_fills: int = 2,
+    min_fills: int = 5,
     tp_min_pct: float = 0.3,
+    fee_maker_pct: float = 0.02,
+    fee_taker_pct: float = 0.05,
+    sl_pct: float = 0.22,
 ) -> tuple[float, int, int, float, float, str]:
     """Все прострелы пары, затем D у края и фильтр шума.
 
-    Ордер на 0.05–0.10% внутрь экстремума. Выход только с TP ≥ 0.3%.
+    Ордер на 0.05–0.10% внутрь экстремума. Выход TP или SL, PnL после комиссий.
     Рекомендация только если доля плюса не ниже min_win_pct.
     """
     inside_hi = inside if inside_max is None else inside_max
@@ -749,6 +777,9 @@ def _recommend_and_score(
             min_win_pct,
             min_fills,
             tp_min,
+            fee_maker_pct=fee_maker_pct,
+            fee_taker_pct=fee_taker_pct,
+            sl_pct=sl_pct,
         )
         if found is None:
             continue
@@ -797,6 +828,9 @@ def _search_dtp(
     min_win_pct: float,
     min_fills: int,
     tp_min_pct: float = 0.3,
+    fee_maker_pct: float = 0.02,
+    fee_taker_pct: float = 0.05,
+    sl_pct: float = 0.22,
 ) -> tuple | None:
     if len(shots) < min_fills:
         return None
@@ -806,6 +840,9 @@ def _search_dtp(
     indexed = [(shot, _report_map(shot)) for shot in shots]
     tp_min = max(0.3, round(float(tp_min_pct or 0.3), 2))
     tps = _candidate_tps(tp_min)
+    fee_tp = round(float(fee_maker_pct or 0) * 2, 4)
+    fee_sl = round(float(fee_maker_pct or 0) + float(fee_taker_pct or 0), 4)
+    sl = max(0.0, round(float(sl_pct or 0), 2))
     best: tuple | None = None
     for distance in distances:
         fills: list[tuple[float, float]] = []
@@ -828,15 +865,20 @@ def _search_dtp(
                 if lower + 1e-9 >= tp_min:
                     tp_set.add(lower)
         for tp in sorted(tp_set):
+            net_tp = round(tp - fee_tp, 6)
+            if net_tp <= 0:
+                continue
             total = 0.0
             plus = 0
             hits = 0
             for time_pnl, mfe in fills:
                 if mfe + 1e-12 >= tp:
-                    pnl = tp
+                    pnl = net_tp
                     hits += 1
+                elif sl > 0:
+                    pnl = round(-sl - fee_sl, 6)
                 else:
-                    pnl = time_pnl
+                    pnl = round(float(time_pnl) - fee_sl, 6)
                 total += pnl
                 if pnl > 0:
                     plus += 1

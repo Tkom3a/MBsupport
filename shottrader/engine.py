@@ -15,7 +15,7 @@ from .config import TraderConfig
 from .okx_broker import OkxBroker
 
 log = logging.getLogger("shottrader.engine")
-MIN_TP_PCT = 0.5
+MIN_TP_PCT = 0.3
 DEPTH_RECOVERY_INSIDE = 0.05  # D_new = D + |ход%| − 0.05
 KEEP_DAYS = 8  # сегодня + 7 предыдущих
 
@@ -55,6 +55,14 @@ def _pnl_usd(side: str, entry: float, exit_px: float, size_usdt: float) -> float
         return 0.0
     chg = (exit_px - entry) / entry if side == "buy" else (entry - exit_px) / entry
     return round(size_usdt * chg, 4)
+
+
+def _fee_round_trip_pct(why: str, maker_pct: float, taker_pct: float) -> float:
+    maker = max(0.0, float(maker_pct or 0))
+    taker = max(0.0, float(taker_pct or 0))
+    if "TP" in str(why or "").upper():
+        return round(maker + maker, 4)
+    return round(maker + taker, 4)
 
 
 def _pnl_pct(side: str, entry: float, exit_px: float) -> float:
@@ -209,7 +217,10 @@ class ShotEngine:
         self.pair_lose_limit = cfg.pair_lose_limit
         self.pair_lose_window_hours = cfg.pair_lose_window_hours
         self.pair_ban_hours = cfg.pair_ban_hours
-        self.min_fills = cfg.min_fills
+        self.min_fills = 5 if int(cfg.min_fills) == 2 else cfg.min_fills
+        self.max_rec_age_min = cfg.max_rec_age_min
+        self.fee_maker_pct = cfg.fee_maker_pct
+        self.fee_taker_pct = cfg.fee_taker_pct
         self.bans: dict[str, int] = {}
         self.ban_until_hist: dict[str, int] = {}
         self.ban_d_lock: dict[str, dict[str, float]] = {}
@@ -287,7 +298,15 @@ class ShotEngine:
         if raw.get("pair_ban_hours") not in (None, ""):
             self.pair_ban_hours = max(0.1, float(raw["pair_ban_hours"]))
         if raw.get("min_fills") not in (None, ""):
-            self.min_fills = max(1, int(float(raw["min_fills"])))
+            val = max(1, int(float(raw["min_fills"])))
+            # старый дефолт был 2; для статистики нужно больше подтверждений
+            self.min_fills = 5 if val == 2 else val
+        if raw.get("max_rec_age_min") not in (None, ""):
+            self.max_rec_age_min = max(0, int(float(raw["max_rec_age_min"])))
+        if raw.get("fee_maker_pct") not in (None, ""):
+            self.fee_maker_pct = max(0.0, min(0.5, float(raw["fee_maker_pct"])))
+        if raw.get("fee_taker_pct") not in (None, ""):
+            self.fee_taker_pct = max(0.0, min(0.5, float(raw["fee_taker_pct"])))
 
     def save_runtime(self) -> None:
         payload = {
@@ -309,6 +328,9 @@ class ShotEngine:
             "pair_lose_window_hours": self.pair_lose_window_hours,
             "pair_ban_hours": self.pair_ban_hours,
             "min_fills": self.min_fills,
+            "max_rec_age_min": self.max_rec_age_min,
+            "fee_maker_pct": self.fee_maker_pct,
+            "fee_taker_pct": self.fee_taker_pct,
         }
         tmp = self.runtime_path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -521,42 +543,37 @@ class ShotEngine:
         )
 
     def _maybe_v1_fail_bump(self, algo: Algo) -> None:
-        """V1 минус + V2 плюс → поднять первую D этой пары."""
+        """V1 минус → поднять первую D. V2 только следует за V1, в расчёт не входит."""
         bump = round(float(self.v1_fail_bump or 0), 2)
         if bump <= 0 or self.is_banned(algo.symbol):
             return
-        if algo.last_v1_pnl is None or algo.last_v2_pnl is None:
+        if algo.last_v1_pnl is None or algo.last_v1_pnl > 0:
             return
-        if algo.last_v1_pnl > 0 or algo.last_v2_pnl <= 0:
-            return
-        key = f"{algo.last_v1_ts}:{algo.last_v2_ts}"
+        key = f"v1:{int(algo.last_v1_ts or 0)}"
         if algo.v1_rescue_key == key:
             return
         algo.v1_rescue_key = key
-        self._raise_v1_by(algo, bump, "V1 минус / V2 плюс")
+        self._raise_v1_by(algo, bump, "V1 минус")
 
     def _maybe_double_loss_depth(self, algo: Algo) -> None:
-        """Два минуса подряд (как V1+V2) → D_new = D + |ход%| − 0.05, V2 с зазором."""
+        """Два минуса V1 подряд → D_new = D + |ход%| − 0.05, V2 с зазором. V2 в расчёт не входит."""
         symbol = algo.symbol
-        streak = self._loss_streak(symbol)
-        if streak < 2 or streak >= self.pair_lose_limit:
-            return
         last_two: list[dict[str, Any]] = []
+        v1_streak = 0
         for row in reversed(self._pair_trades_since_ban(symbol)):
+            if str(row.get("layer") or "v1").lower() == "v2":
+                continue
             if float(row.get("pnl_usd") or 0) > 0:
                 break
-            last_two.append(row)
-            if len(last_two) >= 2:
-                break
-        if len(last_two) < 2:
+            v1_streak += 1
+            if len(last_two) < 2:
+                last_two.append(row)
+        if v1_streak < 2 or v1_streak >= self.pair_lose_limit or len(last_two) < 2:
             return
         key = f"{int(last_two[0].get('ts') or 0)}:{int(last_two[1].get('ts') or 0)}"
         if algo.depth_bump_key == key:
             return
-        v1_row = next(
-            (row for row in last_two if str(row.get("layer") or "v1").lower() != "v2"),
-            last_two[0],
-        )
+        v1_row = last_two[0]
         move = abs(float(v1_row.get("pnl_pct") or 0))
         add = round(move - DEPTH_RECOVERY_INSIDE, 2)
         if add <= 0:
@@ -566,7 +583,7 @@ class ShotEngine:
         self._raise_v1_by(
             algo,
             add,
-            f"два минуса: D {old_d:g}+|{move:g}|−{DEPTH_RECOVERY_INSIDE:g}",
+            f"два минуса V1: D {old_d:g}+|{move:g}|−{DEPTH_RECOVERY_INSIDE:g}",
         )
 
     def _filter_sides(self, sides: Sides) -> Sides:
@@ -816,6 +833,10 @@ class ShotEngine:
             score_n = int(pair.get("score_plus") or 0) + int(pair.get("score_minus") or 0)
             if score_n and score_n < self.min_fills:
                 continue
+            age_min = int(self.max_rec_age_min or 0)
+            last_ts = int(pair.get("last_ts") or 0)
+            if age_min > 0 and last_ts > 0 and _now_ms() - last_ts > age_min * 60_000:
+                continue
             if self._loss_streak(symbol) >= self.pair_lose_limit:
                 self._maybe_pair_ban(symbol)
                 continue
@@ -938,7 +959,8 @@ class ShotEngine:
             if now >= algo.until_ts:
                 self._kill(algo.symbol, "expired")
                 continue
-            hunting = algo.state == "hunt" or algo.v2_state == "hunt"
+            hunting_v2 = algo.v2_state == "hunt" and algo.state != "pos"
+            hunting = algo.state == "hunt" or hunting_v2
             if not hunting:
                 continue
             px = self.tapes[algo.symbol].delayed(self.cfg.follow_delay_ms, now)
@@ -946,8 +968,8 @@ class ShotEngine:
                 continue
             buy = px * (1.0 - algo.buy_distance / 100.0) if algo.state == "hunt" and algo.buy_distance > 0 else 0.0
             sell = px * (1.0 + algo.sell_distance / 100.0) if algo.state == "hunt" and algo.sell_distance > 0 else 0.0
-            buy_v2 = px * (1.0 - algo.buy_v2_distance / 100.0) if algo.v2_state == "hunt" and algo.buy_v2_distance > 0 else 0.0
-            sell_v2 = px * (1.0 + algo.sell_v2_distance / 100.0) if algo.v2_state == "hunt" and algo.sell_v2_distance > 0 else 0.0
+            buy_v2 = px * (1.0 - algo.buy_v2_distance / 100.0) if hunting_v2 and algo.buy_v2_distance > 0 else 0.0
+            sell_v2 = px * (1.0 + algo.sell_v2_distance / 100.0) if hunting_v2 and algo.sell_v2_distance > 0 else 0.0
             moved = 0.0
             for new_px, old_px in (
                 (buy, algo.buy_px),
@@ -1016,7 +1038,7 @@ class ShotEngine:
                 self._enter(algo, "buy", algo.buy_px, ts, "v1")
             elif algo.sell_px > 0 and price >= algo.sell_px:
                 self._enter(algo, "sell", algo.sell_px, ts, "v1")
-        if algo.v2_state == "hunt":
+        if algo.v2_state == "hunt" and algo.state != "pos":
             if algo.buy_v2_px > 0 and price <= algo.buy_v2_px:
                 self._enter(algo, "buy", algo.buy_v2_px, ts, "v2")
             elif algo.sell_v2_px > 0 and price >= algo.sell_v2_px:
@@ -1055,6 +1077,18 @@ class ShotEngine:
                 pass
         algo.buy_id = ""
         algo.sell_id = ""
+        if not self.emulate and self.broker:
+            try:
+                loop = asyncio.get_running_loop()
+                for oid in (algo.buy_v2_id, algo.sell_v2_id):
+                    if oid:
+                        loop.create_task(self.broker.cancel(algo.symbol, oid))
+            except RuntimeError:
+                pass
+        algo.buy_v2_id = ""
+        algo.sell_v2_id = ""
+        algo.buy_v2_px = 0.0
+        algo.sell_v2_px = 0.0
         d = algo.buy_distance if side == "buy" else algo.sell_distance
         tp = algo.buy_tp if side == "buy" else algo.sell_tp
         algo.distance = d
@@ -1077,10 +1111,10 @@ class ShotEngine:
 
     def _maybe_exit_layer(self, algo: Algo, ts: int, price: float, layer: str) -> None:
         if layer == "v2":
-            side, entry, fill_ts = algo.v2_pos_side, algo.v2_entry, algo.v2_fill_ts
+            side, entry, _fill_ts = algo.v2_pos_side, algo.v2_entry, algo.v2_fill_ts
             tp = algo.buy_v2_tp if side == "buy" else algo.sell_v2_tp
         else:
-            side, entry, fill_ts = algo.pos_side, algo.entry, algo.fill_ts
+            side, entry, _fill_ts = algo.pos_side, algo.entry, algo.fill_ts
             tp = algo.buy_tp if side == "buy" else algo.sell_tp
         if entry <= 0:
             return
@@ -1089,18 +1123,14 @@ class ShotEngine:
         sl = self.sl_for(side, layer)
         hit_tp = tp > 0 and favor + 1e-12 >= tp
         hit_sl = sl > 0 and favor - 1e-12 <= -sl
-        timed = ts - fill_ts >= self.cfg.hold_ms
-        if not hit_tp and not hit_sl and not timed:
+        if not hit_tp and not hit_sl:
             return
         if hit_tp:
             exit_px = entry * (1 + tp / 100.0) if side == "buy" else entry * (1 - tp / 100.0)
             tag = "TP"
-        elif hit_sl:
+        else:
             exit_px = entry * (1 - sl / 100.0) if side == "buy" else entry * (1 + sl / 100.0)
             tag = "SL"
-        else:
-            exit_px = price
-            tag = "0.3с"
         if layer == "v2":
             tag = f"V2 {tag}"
         self._close(algo, exit_px, tag, layer)
@@ -1116,14 +1146,22 @@ class ShotEngine:
             tp = algo.buy_tp if side == "buy" else algo.sell_tp
         pnl = _pnl_usd(side, entry, exit_px, algo.size_usdt)
         pct = _pnl_pct(side, entry, exit_px)
+        fee_pct = _fee_round_trip_pct(why, self.fee_maker_pct, self.fee_taker_pct)
+        fee_usd = round(float(algo.size_usdt or 0) * fee_pct / 100.0, 4)
+        net_usd = round(pnl - fee_usd, 4)
+        net_pct = round(pct - fee_pct, 4)
         row = {
             "ts": _now_ms(),
             "symbol": algo.symbol,
             "side": side,
             "entry": entry,
             "exit": exit_px,
-            "pnl_usd": pnl,
-            "pnl_pct": pct,
+            "pnl_usd": net_usd,
+            "pnl_pct": net_pct,
+            "pnl_gross_usd": pnl,
+            "pnl_gross_pct": pct,
+            "fee_pct": fee_pct,
+            "fee_usd": fee_usd,
             "why": why,
             "layer": layer,
             "distance": distance,
@@ -1137,11 +1175,15 @@ class ShotEngine:
             try:
                 loop = asyncio.get_running_loop()
                 close_side = "sell" if side == "buy" else "buy"
-                loop.create_task(self.broker.close_market(algo.symbol, close_side, algo.qty))
+                if "TP" in str(why).upper() and exit_px > 0:
+                    px = self.broker.round_px(algo.symbol, exit_px)
+                    loop.create_task(self.broker.close_limit(algo.symbol, close_side, px, algo.qty))
+                else:
+                    loop.create_task(self.broker.close_market(algo.symbol, close_side, algo.qty))
             except RuntimeError:
                 pass
         tag = "V2 " if layer == "v2" else ""
-        self.note(f"выход {tag}{algo.symbol} {why} pnl {pnl:+.2f}$")
+        self.note(f"выход {tag}{algo.symbol} {why} pnl {net_usd:+.2f}$ (fee {fee_usd:.2f}$)")
         if layer == "v2":
             algo.v2_state = "hunt" if (algo.buy_v2_distance > 0 or algo.sell_v2_distance > 0) else "off"
             algo.v2_pos_side = ""
@@ -1157,27 +1199,29 @@ class ShotEngine:
             algo.buy_px = 0.0
             algo.sell_px = 0.0
         if layer == "v1":
-            algo.last_v1_pnl = pnl
+            algo.last_v1_pnl = net_usd
             algo.last_v1_ts = int(row["ts"])
+            if net_usd <= 0:
+                self._maybe_v1_fail_bump(algo)
+                self._maybe_double_loss_depth(algo)
         else:
-            algo.last_v2_pnl = pnl
+            algo.last_v2_pnl = net_usd
             algo.last_v2_ts = int(row["ts"])
-        self._maybe_v1_fail_bump(algo)
-        if pnl <= 0:
-            self._maybe_double_loss_depth(algo)
+        if net_usd <= 0:
             self._maybe_pair_ban(algo.symbol)
-        if pnl <= -self.autostop_usd:
-            self.emergency(f"сделка {algo.symbol} {pnl:.2f}$ ≤ -{self.autostop_usd:g}$")
+        if net_usd <= -self.autostop_usd:
+            self.emergency(f"сделка {algo.symbol} {net_usd:.2f}$ ≤ -{self.autostop_usd:g}$")
 
     def _check_open_loss(self, algo: Algo, price: float) -> None:
+        entry_fee = float(algo.size_usdt or 0) * float(self.fee_maker_pct or 0) / 100.0
         if algo.state == "pos" and algo.entry > 0:
-            pnl = _pnl_usd(algo.pos_side, algo.entry, price, algo.size_usdt)
+            pnl = _pnl_usd(algo.pos_side, algo.entry, price, algo.size_usdt) - entry_fee
             if pnl <= -self.autostop_usd:
                 self._close(algo, price, "autostop", "v1")
                 self.emergency(f"открытый минус {algo.symbol} {pnl:.2f}$")
                 return
         if algo.v2_state == "pos" and algo.v2_entry > 0:
-            pnl = _pnl_usd(algo.v2_pos_side, algo.v2_entry, price, algo.size_usdt)
+            pnl = _pnl_usd(algo.v2_pos_side, algo.v2_entry, price, algo.size_usdt) - entry_fee
             if pnl <= -self.autostop_usd:
                 self._close(algo, price, "autostop", "v2")
                 self.emergency(f"открытый минус V2 {algo.symbol} {pnl:.2f}$")
@@ -1301,8 +1345,10 @@ class ShotEngine:
                 continue
             if algo.state == "pos" and algo.entry > 0:
                 total += _pnl_usd(algo.pos_side, algo.entry, last, algo.size_usdt)
+                total -= float(algo.size_usdt or 0) * float(self.fee_maker_pct or 0) / 100.0
             if algo.v2_state == "pos" and algo.v2_entry > 0:
                 total += _pnl_usd(algo.v2_pos_side, algo.v2_entry, last, algo.size_usdt)
+                total -= float(algo.size_usdt or 0) * float(self.fee_maker_pct or 0) / 100.0
         return round(total, 4)
 
     @staticmethod
@@ -1451,6 +1497,9 @@ class ShotEngine:
             "pair_lose_window_hours": self.pair_lose_window_hours,
             "pair_ban_hours": self.pair_ban_hours,
             "min_fills": self.min_fills,
+            "max_rec_age_min": self.max_rec_age_min,
+            "fee_maker_pct": self.fee_maker_pct,
+            "fee_taker_pct": self.fee_taker_pct,
             "bans": self.public_bans(),
             "d_locks": self.public_d_locks(),
             "follow_delay_ms": self.cfg.follow_delay_ms,

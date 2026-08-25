@@ -418,7 +418,9 @@
         ["Hold", (f.hold_ms || 300) + " мс"],
         ["Внутрь края", `${f.suggest_inside_pct ?? 0.05}–${f.suggest_inside_max_pct ?? 0.10}%`],
         ["Плюс ≥", (f.min_win_pct ?? 70) + "%"],
-        ["Подтверждений", f.min_fills ?? 2],
+        ["Подтверждений", f.min_fills ?? 5],
+        ["Maker/taker", `${f.fee_maker_pct ?? 0.02}/${f.fee_taker_pct ?? 0.05}%`],
+        ["SL скоринг", (f.score_sl_pct ?? 0.22) + "%"],
         ["BTC ±", `${f.btc_range_pct}% / ${f.btc_window_sec}с`],
       ].map(([k, v]) => `<span class="chip">${k}: <b>${v}</b></span>`).join("");
 

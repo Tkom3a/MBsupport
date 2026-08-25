@@ -218,6 +218,15 @@ class ShotTrader:
             if "min_fills" in body and body["min_fills"] not in (None, ""):
                 self.engine.min_fills = max(1, int(float(body["min_fills"])))
                 self.cfg.min_fills = self.engine.min_fills
+            if "max_rec_age_min" in body and body["max_rec_age_min"] not in (None, ""):
+                self.engine.max_rec_age_min = max(0, int(float(body["max_rec_age_min"])))
+                self.cfg.max_rec_age_min = self.engine.max_rec_age_min
+            if "fee_maker_pct" in body and body["fee_maker_pct"] not in (None, ""):
+                self.engine.fee_maker_pct = max(0.0, min(0.5, float(body["fee_maker_pct"])))
+                self.cfg.fee_maker_pct = self.engine.fee_maker_pct
+            if "fee_taker_pct" in body and body["fee_taker_pct"] not in (None, ""):
+                self.engine.fee_taker_pct = max(0.0, min(0.5, float(body["fee_taker_pct"])))
+                self.cfg.fee_taker_pct = self.engine.fee_taker_pct
         except (TypeError, ValueError) as exc:
             return web.json_response({"ok": False, "error": f"неверное значение: {exc}"}, status=400)
         if "shotcore_url" in body:
@@ -235,7 +244,8 @@ class ShotTrader:
             f"V2L={self.engine.stop_loss_v2_long_pct:g}% V2S={self.engine.stop_loss_v2_short_pct:g}% "
             f"v1fail=+{self.engine.v1_fail_bump:g}% "
             f"бан={self.engine.pair_lose_limit} подряд / "
-            f"→ {self.engine.pair_ban_hours:g}ч  подтверждений={self.engine.min_fills}"
+            f"подтверждений={self.engine.min_fills} recAge={self.engine.max_rec_age_min}м "
+            f"fee {self.engine.fee_maker_pct:g}/{self.engine.fee_taker_pct:g}%"
         )
         return web.json_response(
             {
@@ -260,6 +270,9 @@ class ShotTrader:
                 "pair_lose_window_hours": self.engine.pair_lose_window_hours,
                 "pair_ban_hours": self.engine.pair_ban_hours,
                 "min_fills": self.engine.min_fills,
+                "max_rec_age_min": self.engine.max_rec_age_min,
+                "fee_maker_pct": self.engine.fee_maker_pct,
+                "fee_taker_pct": self.engine.fee_taker_pct,
             }
         )
 
@@ -350,7 +363,11 @@ class ShotTrader:
         try:
             async with self.session.post(
                 url,
-                json={"min_fills": int(self.engine.min_fills)},
+                json={
+                    "min_fills": int(self.engine.min_fills),
+                    "fee_maker_pct": float(self.engine.fee_maker_pct),
+                    "fee_taker_pct": float(self.engine.fee_taker_pct),
+                },
                 headers=self._shotcore_headers(),
                 timeout=aiohttp.ClientTimeout(total=8),
             ) as resp:
@@ -360,7 +377,10 @@ class ShotTrader:
                     return
                 data = await resp.json()
                 got = data.get("min_fills")
-                self.engine.note(f"порог подтверждений: {self.engine.min_fills} (ShotCore {got})")
+                self.engine.note(
+                    f"порог подтверждений: {self.engine.min_fills} (ShotCore {got}) "
+                    f"fee {self.engine.fee_maker_pct:g}/{self.engine.fee_taker_pct:g}%"
+                )
         except Exception as exc:
             self.engine.note(f"порог подтверждений не ушёл в ShotCore: {exc}")
 

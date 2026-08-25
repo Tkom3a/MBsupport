@@ -42,6 +42,9 @@ class ShotCore:
             suggest_inside_max_pct=cfg.shot.suggest_inside_max_pct,
             min_win_pct=cfg.shot.min_win_pct,
             min_fills=cfg.shot.min_fills,
+            fee_maker_pct=cfg.shot.fee_maker_pct,
+            fee_taker_pct=cfg.shot.fee_taker_pct,
+            score_sl_pct=cfg.shot.score_sl_pct,
             mt_plan_name=cfg.output.mt_plan_name,
             mt_run_hours=cfg.output.mt_run_hours,
         )
@@ -101,6 +104,9 @@ class ShotCore:
             "suggest_inside_pct",
             "suggest_inside_max_pct",
             "distance_levels",
+            "fee_maker_pct",
+            "fee_taker_pct",
+            "score_sl_pct",
         }
         self.store.apply_algo({k: updates[k] for k in store_keys if k in updates})
         shot = self.cfg.shot
@@ -138,6 +144,12 @@ class ShotCore:
             shot.min_win_pct = max(0.0, min(100.0, float(updates["min_win_pct"])))
         if "min_fills" in updates and updates["min_fills"] not in (None, ""):
             shot.min_fills = max(1, int(float(updates["min_fills"])))
+        if "fee_maker_pct" in updates and updates["fee_maker_pct"] not in (None, ""):
+            shot.fee_maker_pct = max(0.0, float(updates["fee_maker_pct"]))
+        if "fee_taker_pct" in updates and updates["fee_taker_pct"] not in (None, ""):
+            shot.fee_taker_pct = max(0.0, float(updates["fee_taker_pct"]))
+        if "score_sl_pct" in updates and updates["score_sl_pct"] not in (None, ""):
+            shot.score_sl_pct = max(0.0, float(updates["score_sl_pct"]))
         for det in self.detectors.values():
             det.min_percent = shot.min_percent
             det.min_trades = shot.min_trades

@@ -52,7 +52,10 @@ class ShotConfig:
     suggest_inside_pct: float = 0.05
     suggest_inside_max_pct: float = 0.10
     min_win_pct: float = 70.0
-    min_fills: int = 2
+    min_fills: int = 5
+    fee_maker_pct: float = 0.02
+    fee_taker_pct: float = 0.05
+    score_sl_pct: float = 0.22
 
 
 @dataclass
@@ -274,6 +277,13 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         shot.min_win_pct = _as_float("MIN_WIN_PCT", shot.min_win_pct)
     if _env_filled("MIN_FILLS"):
         shot.min_fills = _as_int("MIN_FILLS", shot.min_fills)
+    if _env_filled("FEE_MAKER_PCT"):
+        shot.fee_maker_pct = max(0.0, _as_float("FEE_MAKER_PCT", shot.fee_maker_pct))
+    if _env_filled("FEE_TAKER_PCT"):
+        shot.fee_taker_pct = max(0.0, _as_float("FEE_TAKER_PCT", shot.fee_taker_pct))
+    sl_env = os.getenv("STOP_LOSS_PCT", "").strip() or os.getenv("SCORE_SL_PCT", "").strip()
+    if sl_env:
+        shot.score_sl_pct = max(0.0, float(sl_env))
 
     if _env_filled("BTC_SYMBOL"):
         btc_filter.symbol = norm_symbol(_env("BTC_SYMBOL"))
@@ -349,6 +359,9 @@ def public_filters(cfg: AppConfig) -> dict[str, Any]:
         "suggest_inside_max_pct": cfg.shot.suggest_inside_max_pct,
         "min_win_pct": cfg.shot.min_win_pct,
         "min_fills": cfg.shot.min_fills,
+        "fee_maker_pct": cfg.shot.fee_maker_pct,
+        "fee_taker_pct": cfg.shot.fee_taker_pct,
+        "score_sl_pct": cfg.shot.score_sl_pct,
         "mt_run_hours": cfg.output.mt_run_hours,
         "mt_plan_name": cfg.output.mt_plan_name,
         "distance_levels": cfg.shot.distance_levels,

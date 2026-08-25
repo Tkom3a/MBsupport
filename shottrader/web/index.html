@@ -179,7 +179,7 @@
         <label>Смещение к рекомендуемому TP, %</label>
         <input id="tpOffset" type="number" step="0.01" min="0" max="2" value="0" />
         <div class="muted" id="tpOffsetHint" style="margin:6px 0 8px">
-          рекомендация 0.40% → TP 0.50% · пол 0.5%
+          рекомендация 0.40% → TP 0.40% · пол 0.3%
         </div>
         <button class="primary" id="saveTpBtn">Применить TP</button>
         <h2 style="margin-top:14px">Стоп-лосс</h2>
@@ -211,10 +211,25 @@
         <label>На сколько поднять V1, %</label>
         <input id="v1FailBump" type="number" step="0.01" min="0" max="2" value="0.15" />
         <div class="muted" id="v1FailHint" style="margin:6px 0 8px">
-          V1 минус и V2 плюс → первая дистанция пары +0.15%
+          V1 минус → первая дистанция +0.15%, V2 едет за V1
         </div>
         <button class="primary" id="saveFailBumpBtn">Применить подъём</button>
         <div id="v1FailList" class="muted" style="margin-top:8px"></div>
+        <h2 style="margin-top:14px">Комиссии OKX Regular</h2>
+        <div class="row2">
+          <div>
+            <label>Maker, %</label>
+            <input id="feeMaker" type="number" step="0.001" min="0" max="0.5" value="0.02" />
+          </div>
+          <div>
+            <label>Taker, %</label>
+            <input id="feeTaker" type="number" step="0.001" min="0" max="0.5" value="0.05" />
+          </div>
+        </div>
+        <div class="muted" id="feeHint" style="margin:6px 0 8px">
+          TP: 2×maker. SL: maker+taker. PnL в журнале — после комиссий.
+        </div>
+        <button class="primary" id="saveFeeBtn">Применить комиссии</button>
         <h2 style="margin-top:14px">Направление</h2>
         <label class="dir-check"><input id="tradeLong" type="checkbox" checked /> Ставить лонги (BUY)</label>
         <label class="dir-check"><input id="tradeShort" type="checkbox" checked /> Ставить шорты (SHORT)</label>
@@ -225,9 +240,14 @@
         <button id="resumeBtn" style="margin-top:6px">Снять авто-стоп</button>
         <h2 style="margin-top:14px">Подтверждения</h2>
         <label>Минимум прострелов для ордера</label>
-        <input id="minFills" type="number" step="1" min="1" value="2" />
+        <input id="minFills" type="number" step="1" min="1" value="5" />
         <div class="muted" id="fillsHint" style="margin:6px 0 8px">
-          Дистанция должна подтвердиться столько раз, иначе пару в план не берём. Было 3, сейчас 2.
+          Дистанция должна подтвердиться столько раз, иначе пару в план не берём.
+        </div>
+        <label>Макс. возраст рекомендации, мин</label>
+        <input id="recAge" type="number" step="1" min="0" value="45" />
+        <div class="muted" id="recAgeHint" style="margin:6px 0 8px">
+          Старше — не ставим. 0 — без фильтра.
         </div>
         <button class="primary" id="saveFillsBtn">Применить порог</button>
         <h2 style="margin-top:14px">Сессия</h2>
@@ -259,7 +279,7 @@
       <section class="center">
         <div class="board-head">
           <b>Рынок · ордера онлайн</b>
-          <span class="muted" id="boardMeta">follow 1 с · hold 0.3 с</span>
+          <span class="muted" id="boardMeta">follow 1 с · выход TP/SL</span>
           <div class="grow"></div>
           <span class="muted" id="tickAge">обновление…</span>
         </div>
@@ -316,10 +336,11 @@
                   <th>Плечо</th>
                   <th>Ордер</th>
                   <th>ход %</th>
+                  <th>комиссия</th>
                   <th>PnL</th>
                 </tr>
               </thead>
-              <tbody id="dealsBody"><tr><td colspan="7" class="muted">нет сделок за сутки</td></tr></tbody>
+              <tbody id="dealsBody"><tr><td colspan="9" class="muted">нет сделок за сутки</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -417,7 +438,8 @@
     const settingsDirty = {
       orderSize20: false, orderSize50: false, autostop: false, minDist: false, minV2Gap: false, v1Offset: false, tpOffset: false,
       slLong: false, slShort: false, slV2Long: false, slV2Short: false,
-      banLoseLimit: false, banLoseWindow: false, banHours: false, minFills: false, v1FailBump: false,
+      banLoseLimit: false, banLoseWindow: false, banHours: false, minFills: false, recAge: false, v1FailBump: false,
+      feeMaker: false, feeTaker: false,
     };
     let settingsLocked = false;
     let settingsBusy = false;
@@ -449,6 +471,9 @@
         pair_lose_window_hours: Number(document.getElementById("banLoseWindow").value),
         pair_ban_hours: Number(document.getElementById("banHours").value),
         min_fills: Number(document.getElementById("minFills").value),
+        max_rec_age_min: Number(document.getElementById("recAge").value),
+        fee_maker_pct: Number(document.getElementById("feeMaker").value),
+        fee_taker_pct: Number(document.getElementById("feeTaker").value),
         trade_long: document.getElementById("tradeLong").checked,
         trade_short: document.getElementById("tradeShort").checked,
       };
@@ -473,6 +498,9 @@
       if (data.pair_lose_window_hours != null) document.getElementById("banLoseWindow").value = data.pair_lose_window_hours;
       if (data.pair_ban_hours != null) document.getElementById("banHours").value = data.pair_ban_hours;
       if (data.min_fills != null) document.getElementById("minFills").value = data.min_fills;
+      if (data.max_rec_age_min != null) document.getElementById("recAge").value = data.max_rec_age_min;
+      if (data.fee_maker_pct != null) document.getElementById("feeMaker").value = data.fee_maker_pct;
+      if (data.fee_taker_pct != null) document.getElementById("feeTaker").value = data.fee_taker_pct;
       if (data.trade_long != null) document.getElementById("tradeLong").checked = !!data.trade_long;
       if (data.trade_short != null) document.getElementById("tradeShort").checked = !!data.trade_short;
       settingsDirty.orderSize20 = false;
@@ -491,6 +519,9 @@
       settingsDirty.banLoseWindow = false;
       settingsDirty.banHours = false;
       settingsDirty.minFills = false;
+      settingsDirty.recAge = false;
+      settingsDirty.feeMaker = false;
+      settingsDirty.feeTaker = false;
       if (state) {
         if (data.order_size_x20 != null) state.order_size_x20 = data.order_size_x20;
         if (data.order_size_x50 != null) state.order_size_x50 = data.order_size_x50;
@@ -508,6 +539,9 @@
         if (data.pair_lose_window_hours != null) state.pair_lose_window_hours = data.pair_lose_window_hours;
         if (data.pair_ban_hours != null) state.pair_ban_hours = data.pair_ban_hours;
         if (data.min_fills != null) state.min_fills = data.min_fills;
+        if (data.max_rec_age_min != null) state.max_rec_age_min = data.max_rec_age_min;
+        if (data.fee_maker_pct != null) state.fee_maker_pct = data.fee_maker_pct;
+        if (data.fee_taker_pct != null) state.fee_taker_pct = data.fee_taker_pct;
         if (data.trade_long != null) state.trade_long = data.trade_long;
         if (data.trade_short != null) state.trade_short = data.trade_short;
       }
@@ -572,6 +606,18 @@
         alert("Минимум подтверждений должен быть ≥ 1");
         return;
       }
+      if (!Number.isFinite(payload.max_rec_age_min) || payload.max_rec_age_min < 0) {
+        alert("Возраст рекомендации должен быть ≥ 0 мин");
+        return;
+      }
+      if (!Number.isFinite(payload.fee_maker_pct) || payload.fee_maker_pct < 0) {
+        alert("Комиссия maker должна быть ≥ 0");
+        return;
+      }
+      if (!Number.isFinite(payload.fee_taker_pct) || payload.fee_taker_pct < 0) {
+        alert("Комиссия taker должна быть ≥ 0");
+        return;
+      }
       settingsBusy = true;
       settingsLocked = true;
       const btn = document.getElementById("saveBtn");
@@ -619,6 +665,9 @@
       syncInput("banLoseWindow", state.pair_lose_window_hours);
       syncInput("banHours", state.pair_ban_hours);
       syncInput("minFills", state.min_fills);
+      syncInput("recAge", state.max_rec_age_min);
+      syncInput("feeMaker", state.fee_maker_pct);
+      syncInput("feeTaker", state.fee_taker_pct);
       if (!document.getElementById("tradeLong").matches(":focus")) {
         document.getElementById("tradeLong").checked = state.trade_long !== false;
       }
@@ -657,7 +706,7 @@
         : "";
       const failBump = Number(state.v1_fail_bump || 0);
       document.getElementById("v1FailHint").textContent =
-        `V1 минус и V2 плюс → первая дистанция пары +${failBump.toFixed(2)}%`;
+        `V1 минус → первая дистанция +${failBump.toFixed(2)}%, V2 едет за V1`;
       const failRows = state.v1_fail_bumps || [];
       document.getElementById("v1FailList").innerHTML = failRows.length
         ? failRows.map((b) => {
@@ -665,15 +714,23 @@
             return `<div class="amber" style="margin-bottom:3px">${name} V1 +${Number(b.extra || 0).toFixed(2)}%</div>`;
           }).join("")
         : "";
-      const fillsN = Number(state.min_fills || 2);
+      const fillsN = Number(state.min_fills || 5);
       document.getElementById("fillsHint").textContent =
         `Дистанция должна подтвердиться ${fillsN} раз, иначе пару в план не берём.`;
+      const recAge = Number(state.max_rec_age_min || 0);
+      document.getElementById("recAgeHint").textContent = recAge > 0
+        ? `Рекомендация старше ${recAge} мин не ставится. 0 — без фильтра.`
+        : "Фильтр возраста выключен.";
+      const maker = Number(state.fee_maker_pct || 0);
+      const taker = Number(state.fee_taker_pct || 0);
+      document.getElementById("feeHint").textContent =
+        `TP: 2×maker = ${(maker * 2).toFixed(3)}% · SL: maker+taker = ${(maker + taker).toFixed(3)}% · PnL после комиссий.`;
       const off = Number(state.v1_offset || 0);
       const sign = off >= 0 ? "+" : "";
       document.getElementById("v1OffsetHint").textContent =
         `рекомендация 1% → ордер ${(1 + off).toFixed(2)}% (${sign}${off.toFixed(2)}%) · плюс глубже, минус ближе`;
       const tpOff = Number(state.tp_offset || 0);
-      const tpFloor = Number(state.min_tp_pct || 0.5);
+      const tpFloor = Number(state.min_tp_pct || 0.3);
       const tpEx = Math.max(0.4 + tpOff, tpFloor);
       document.getElementById("tpOffsetHint").textContent =
         `рекомендация 0.40% + ${tpOff.toFixed(2)}% → TP ${tpEx.toFixed(2)}% · пол ${tpFloor.toFixed(2)}%`;
@@ -692,7 +749,9 @@
           }).join("")
         : `<span class="muted">нет</span>`;
       document.getElementById("boardMeta").textContent =
-        `follow ${(state.follow_delay_ms || 1000) / 1000} с · hold ${(state.hold_ms || 300) / 1000} с`
+        `follow ${(state.follow_delay_ms || 1000) / 1000} с · выход TP/SL`
+        + ` · fee ${Number(state.fee_maker_pct || 0).toFixed(3)}/${Number(state.fee_taker_pct || 0).toFixed(3)}%`
+        + ` · rec ${Number(state.max_rec_age_min || 0)}м`
         + ` · SL L${Number(state.stop_loss_long_pct || 0).toFixed(2)}`
         + ` S${Number(state.stop_loss_short_pct || 0).toFixed(2)}`
         + ` V2L${Number(state.stop_loss_v2_long_pct || 0).toFixed(2)}`
@@ -812,7 +871,7 @@
         `${shown} сделок · ${plus}/${rows.length - plus} · ${money(pnl)}`;
       const body = document.getElementById("dealsBody");
       if (!rows.length) {
-        body.innerHTML = `<tr><td colspan="8" class="muted">${q ? "нет сделок по фильтру" : "нет сделок за сутки"}</td></tr>`;
+        body.innerHTML = `<tr><td colspan="9" class="muted">${q ? "нет сделок по фильтру" : "нет сделок за сутки"}</td></tr>`;
       } else {
         body.innerHTML = [...rows].reverse().map((j) => {
           const side = String(j.side || "").toLowerCase();
@@ -832,6 +891,10 @@
           const pctCell = Number.isFinite(pct)
             ? `<td class="${pct >= 0 ? "up" : "down"}">${pct >= 0 ? "+" : ""}${fmt(pct, 3)}%</td>`
             : `<td class="muted">—</td>`;
+          const feeUsd = Number(j.fee_usd);
+          const feeCell = Number.isFinite(feeUsd)
+            ? `<td class="muted">${fmt(feeUsd, 2)}$</td>`
+            : `<td class="muted">—</td>`;
           return `<tr>
             <td class="muted">${tradeTime(j.ts)}</td>
             <td>${(j.symbol || "").split("-")[0]}</td>
@@ -840,6 +903,7 @@
             <td class="amber">${lever > 0 ? "x" + lever : "—"}</td>
             <td>${size > 0 ? fmt(size) + "$" : "—"}</td>
             ${pctCell}
+            ${feeCell}
             <td class="${Number(j.pnl_usd) >= 0 ? "up" : "down"}">${money(j.pnl_usd)}</td>
           </tr>`;
         }).join("");
@@ -904,11 +968,14 @@
       if (settingsDirty.banLoseWindow) next.pair_lose_window_hours = Number(document.getElementById("banLoseWindow").value);
       if (settingsDirty.banHours) next.pair_ban_hours = Number(document.getElementById("banHours").value);
       if (settingsDirty.minFills) next.min_fills = Number(document.getElementById("minFills").value);
+      if (settingsDirty.recAge) next.max_rec_age_min = Number(document.getElementById("recAge").value);
+      if (settingsDirty.feeMaker) next.fee_maker_pct = Number(document.getElementById("feeMaker").value);
+      if (settingsDirty.feeTaker) next.fee_taker_pct = Number(document.getElementById("feeTaker").value);
       state = next;
       render();
     }
 
-    ["orderSize20", "orderSize50", "autostop", "minDist", "minV2Gap", "v1Offset", "tpOffset", "slLong", "slShort", "slV2Long", "slV2Short", "v1FailBump", "banLoseLimit", "banLoseWindow", "banHours", "minFills"].forEach((id) => {
+    ["orderSize20", "orderSize50", "autostop", "minDist", "minV2Gap", "v1Offset", "tpOffset", "slLong", "slShort", "slV2Long", "slV2Short", "v1FailBump", "banLoseLimit", "banLoseWindow", "banHours", "minFills", "recAge", "feeMaker", "feeTaker"].forEach((id) => {
       const el = document.getElementById(id);
       el.addEventListener("input", () => { settingsDirty[id] = true; });
       el.addEventListener("keydown", (ev) => {
@@ -920,6 +987,7 @@
     });
     document.getElementById("saveBtn").onclick = () => saveSettings();
     document.getElementById("saveFillsBtn").onclick = () => saveSettings();
+    document.getElementById("saveFeeBtn").onclick = () => saveSettings();
     document.getElementById("saveOffsetBtn").onclick = () => saveSettings();
     document.getElementById("saveTpBtn").onclick = () => saveSettings();
     document.getElementById("saveSlBtn").onclick = () => saveSettings();

@@ -147,6 +147,22 @@ class OkxBroker:
         except Exception as exc:
             log.debug("cancel %s: %s", ord_id, exc)
 
+    async def close_limit(self, inst_id: str, side: str, px: str, sz: str) -> str:
+        rows = await self._request(
+            "POST",
+            "/api/v5/trade/order",
+            {
+                "instId": inst_id,
+                "tdMode": "isolated",
+                "side": side,
+                "ordType": "limit",
+                "px": px,
+                "sz": sz,
+                "reduceOnly": True,
+            },
+        )
+        return str((rows or [{}])[0].get("ordId") or "")
+
     async def close_market(self, inst_id: str, side: str, sz: str) -> None:
         await self._request(
             "POST",

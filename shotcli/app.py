@@ -20,6 +20,9 @@ ALGO_KEYS = [
     "min_quote_volume",
     "cooldown_ms",
     "windows_ms",
+    "fee_maker_pct",
+    "fee_taker_pct",
+    "score_sl_pct",
 ]
 
 
@@ -50,7 +53,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("algo", help="показать параметры алгоритма")
 
     p_set = sub.add_parser("set", help="правка настроек терминала")
-    p_set.add_argument("key", help="long|short|size20|size50|autostop")
+    p_set.add_argument("key", help="long|short|size20|size50|autostop|minfills|feemaker|feetaker|recage")
     p_set.add_argument("value", help="on/off или число")
 
     p_algo = sub.add_parser("algo-set", help="правка алгоритма ShotCore: ключ=значение ...")
@@ -226,7 +229,9 @@ def _status_lines(cli: ShotClient, state: dict[str, Any], ping: dict[str, str]) 
         f"V2L={state.get('stop_loss_v2_long_pct', 0.22)}% "
         f"V2S={state.get('stop_loss_v2_short_pct', 0.22)}%  "
         f"v1fail=+{state.get('v1_fail_bump', 0.15)}%  "
-        f"подтверждений={state.get('min_fills', 2)}"
+        f"подтверждений={state.get('min_fills', 5)}  "
+        f"recAge={state.get('max_rec_age_min', 45)}м  "
+        f"fee {state.get('fee_maker_pct', 0.02)}/{state.get('fee_taker_pct', 0.05)}%"
         ),
         (
             f"час    сделок {hour.get('trades', 0)}  "
@@ -436,6 +441,12 @@ def apply_set(cli: ShotClient, key: str, value: str) -> None:
         "minfills": "min_fills",
         "min_fills": "min_fills",
         "fills": "min_fills",
+        "feemaker": "fee_maker_pct",
+        "fee_maker": "fee_maker_pct",
+        "feetaker": "fee_taker_pct",
+        "fee_taker": "fee_taker_pct",
+        "recage": "max_rec_age_min",
+        "rec_age": "max_rec_age_min",
         "core": "shotcore_url",
         "shotcore": "shotcore_url",
     }
@@ -443,7 +454,7 @@ def apply_set(cli: ShotClient, key: str, value: str) -> None:
     if not field:
         raise RuntimeError(
             f"неизвестный ключ {key}. доступны: long, short, size20, size50, autostop, "
-            "mindist, v2gap, v1off, tpoff, sl, sllong, slshort, slv2long, slv2short, v1fail, banloses, banwindow, banhours, minfills, core"
+            "mindist, v2gap, v1off, tpoff, sl, sllong, slshort, slv2long, slv2short, v1fail, banloses, banwindow, banhours, minfills, feemaker, feetaker, recage, core"
         )
     if field == "shotcore_url":
         res = cli.trader_post("/api/shotcore", {"url": value})
@@ -475,7 +486,9 @@ def apply_set(cli: ShotClient, key: str, value: str) -> None:
         f"V2L={res.get('stop_loss_v2_long_pct')}% V2S={res.get('stop_loss_v2_short_pct')}%  "
         f"бан={res.get('pair_lose_limit')} подряд → {res.get('pair_ban_hours')}ч  "
         f"v1fail=+{res.get('v1_fail_bump')}%  "
-        f"подтверждений={res.get('min_fills')}"
+        f"подтверждений={res.get('min_fills')}  "
+        f"recAge={res.get('max_rec_age_min')}м  "
+        f"fee {res.get('fee_maker_pct')}/{res.get('fee_taker_pct')}%"
     )
 
 
